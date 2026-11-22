@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="md_theme_primary">#006493</color>
+    <color name="md_theme_onPrimary">#FFFFFF</color>
+    <color name="md_theme_primaryContainer">#C9E6FF</color>
+    <color name="md_theme_onPrimaryContainer">#001E2F</color>
+    <color name="md_theme_secondary">#4F616E</color>
+    <color name="md_theme_onSecondary">#FFFFFF</color>
+    <color name="md_theme_secondaryContainer">#D2E5F5</color>
+    <color name="md_theme_onSecondaryContainer">#0B1D29</color>
+    <color name="md_theme_surface">#F7F9FC</color>
+    <color name="md_theme_onSurface">#191C1E</color>
+    <color name="md_theme_surfaceVariant">#DDE3E9</color>
+    <color name="md_theme_onSurfaceVariant">#41474D</color>
+    <color name="md_theme_outline">#71787E</color>
+    <color name="md_theme_error">#BA1A1A</color>
+    <color name="md_theme_onError">#FFFFFF</color>
+    <color name="md_theme_errorContainer">#FFDAD6</color>
+    <color name="md_theme_onErrorContainer">#410002</color>
+
+    <color name="record_red">#C62828</color>
+    <color name="record_red_dark">#8E0000</color>
+    <color name="status_local">#546E7A</color>
+    <color name="status_uploading">#1565C0</color>
+    <color name="status_uploaded">#2E7D32</color>
+    <color name="status_failed">#C62828</color>
+    <color name="status_bar_color">#006493</color>
+    <color name="ic_launcher_background">#006493</color>
+</resources>

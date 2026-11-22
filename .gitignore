@@ -1,0 +1,5 @@
+PC_APP/__pycache__
+PC_APP/.env
+android_APP/.gradle
+android_APP/.idea
+android_APP/app/build
