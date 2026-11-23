@@ -13,10 +13,18 @@ from ..config import (
     read_config,
     save_config,
 )
+from ..hotkey import hotkey_available, parse_hotkey
 from ..paths import DATA_DIR, ENV_PATH
+from ..prefs import (
+    DEFAULT_SHOW_HOTKEY,
+    SETTINGS_PATH,
+    Preferences,
+    load_preferences,
+    save_preferences,
+)
 from ..util import open_path
 from .theme import Theme, UI_FONT
-from .widgets import LinkButton, PillButton, ScrollFrame
+from .widgets import HotkeyInput, LinkButton, PillButton, ScrollFrame
 
 FIELD_KEYS = ("account", "bucket", "access", "secret", "public", "prefix")
 FIELD_LABELS = {
@@ -47,13 +55,14 @@ class SettingsDialog(tk.Toplevel):
         self._closed = False
         self._busy = False
         self._secret_visible = False
+        self._initial_spec = None
         self.entries: dict[str, tk.Entry] = {}
 
-        self.title("R2 设置")
+        self.title("设置")
         self.configure(bg=theme.surface)
         self.transient(parent)
         self.resizable(True, True)
-        self.minsize(600, 560)
+        self.minsize(600, 620)
         self.protocol("WM_DELETE_WINDOW", self._close)
         self.bind("<Escape>", lambda _event: self._close())
 
@@ -73,7 +82,7 @@ class SettingsDialog(tk.Toplevel):
         text_block.pack(side="left", fill="x", expand=True)
         tk.Label(
             text_block,
-            text="R2 设置",
+            text="设置",
             font=(UI_FONT, 18, "bold"),
             fg=theme.on_surface,
             bg=theme.surface,
@@ -81,7 +90,7 @@ class SettingsDialog(tk.Toplevel):
         ).pack(fill="x")
         tk.Label(
             text_block,
-            text="配置保存在项目文件夹的 .env 中",
+            text="全局快捷键与 Cloudflare R2 配置",
             font=(UI_FONT, 9),
             fg=theme.on_surface_variant,
             bg=theme.surface,
@@ -99,6 +108,27 @@ class SettingsDialog(tk.Toplevel):
         self.scroll.pack(fill="both", expand=True, padx=24, pady=(10, 0))
         body = self.scroll.inner
 
+        self._section_title(body, "全局快捷键")
+        self.hotkey_input = HotkeyInput(
+            body,
+            theme,
+            helper=(
+                "点击输入框后按下新的组合键，例如 Ctrl+Alt+R。"
+                "在任何程序中按下它即可调出主窗口；点击“清除”可禁用。"
+            ),
+        )
+        self.hotkey_input.pack(fill="x", pady=(0, 10))
+        tk.Label(
+            body,
+            text="录音的全局快捷键 F9 固定不变。",
+            font=(UI_FONT, 8),
+            fg=theme.on_surface_variant,
+            bg=theme.surface,
+            anchor="w",
+        ).pack(fill="x", pady=(0, 14))
+        self._divider(body)
+
+        self._section_title(body, "Cloudflare R2")
         tk.Label(
             body,
             text=(
@@ -198,6 +228,14 @@ class SettingsDialog(tk.Toplevel):
         tk.Frame(inner, bg=theme.secondary_container, height=8).pack(fill="x")
         self._path_row(
             inner,
+            "快捷键设置",
+            str(SETTINGS_PATH),
+            "打开文件夹",
+            lambda: open_path(SETTINGS_PATH.parent),
+        )
+        tk.Frame(inner, bg=theme.secondary_container, height=8).pack(fill="x")
+        self._path_row(
+            inner,
             "录音保存位置",
             str(DATA_DIR),
             "打开文件夹",
@@ -258,6 +296,24 @@ class SettingsDialog(tk.Toplevel):
             font=(UI_FONT, 10),
         )
         self.btn_test.pack(side="right", padx=(0, 10))
+
+    def _section_title(self, parent: tk.Misc, text: str) -> None:
+        theme = self._theme
+        tk.Label(
+            parent,
+            text=text,
+            font=(UI_FONT, 12, "bold"),
+            fg=theme.on_surface,
+            bg=theme.surface,
+            anchor="w",
+        ).pack(fill="x", pady=(2, 6))
+
+    def _divider(self, parent: tk.Misc) -> None:
+        tk.Frame(
+            parent,
+            bg=self._theme.outline,
+            height=1,
+        ).pack(fill="x", pady=(4, 14))
 
     def _field(
         self,
@@ -382,6 +438,19 @@ class SettingsDialog(tk.Toplevel):
         self.entries["public"].insert(0, config.public_base_url)
         self.entries["prefix"].insert(0, config.key_prefix or DEFAULT_PREFIX)
 
+        text = load_preferences().show_hotkey.strip()
+        spec = None
+        if text:
+            try:
+                spec = parse_hotkey(text)
+            except ValueError:
+                try:
+                    spec = parse_hotkey(DEFAULT_SHOW_HOTKEY)
+                except ValueError:
+                    spec = None
+        self.hotkey_input.set_spec(spec)
+        self._initial_spec = spec
+
     def _toggle_secret(self) -> None:
         self._secret_visible = not self._secret_visible
         self._secret_entry.configure(show="" if self._secret_visible else "•")
@@ -494,9 +563,42 @@ class SettingsDialog(tk.Toplevel):
     def _save(self) -> None:
         if self._busy:
             return
-        config = self._collect()
-        if config is None:
+
+        spec = self.hotkey_input.get_spec()
+        if (
+            spec is not None
+            and spec != self._initial_spec
+            and not hotkey_available(spec)
+        ):
+            self._set_result(
+                f"快捷键 {spec.text} 已被其他程序占用，请换一个。",
+                self._theme.error,
+            )
             return
+
+        config = self._collect()
+        try:
+            save_preferences(
+                Preferences(
+                    show_hotkey=spec.text if spec is not None else ""
+                )
+            )
+        except Exception as exc:
+            self._set_result(f"保存快捷键设置失败：{exc}", self._theme.error)
+            messagebox.showerror("保存失败", str(exc), parent=self)
+            return
+
+        self._initial_spec = spec
+        if config is None:
+            # 快捷键已保存；R2 配置还不完整，保持窗口打开以便继续填写。
+            self._set_result(
+                "快捷键已保存；R2 配置未填写完整，暂未保存 R2 设置。",
+                self._theme.on_surface_variant,
+            )
+            if self._on_saved is not None:
+                self._on_saved()
+            return
+
         try:
             save_config(config)
         except Exception as exc:

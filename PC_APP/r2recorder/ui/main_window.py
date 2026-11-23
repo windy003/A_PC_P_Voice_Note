@@ -14,9 +14,20 @@ from typing import Callable
 
 from .. import __version__, audio, formats
 from ..config import read_config
-from ..hotkey import GlobalHotkey
+from ..hotkey import (
+    SHOW_HOTKEY_ID,
+    GlobalHotkey,
+    HotkeySpec,
+    parse_hotkey,
+)
 from ..model import Recording, RecordingRepository, UploadStatus
 from ..paths import CACHE_DIR, DATA_DIR, RECORDINGS_DIR, ensure_dirs
+from ..prefs import (
+    DEFAULT_SHOW_HOTKEY,
+    Preferences,
+    load_preferences,
+    save_preferences,
+)
 from ..upload import UploadManager
 from ..util import open_path
 from .settings_dialog import SettingsDialog
@@ -62,6 +73,8 @@ class MainWindow(tk.Tk):
         self._tray_hint_shown = False
         self.restart_requested = False
         self._status_cache: dict[str, tuple[UploadStatus, str | None]] = {}
+        self.show_hotkey: GlobalHotkey | None = None
+        self.show_hotkey_spec = self._load_show_hotkey_spec()
 
         self.title("R2 录音机")
         self.configure(bg=theme.surface)
@@ -100,19 +113,33 @@ class MainWindow(tk.Tk):
         else:
             logger.warning("全局快捷键 F9 不可用，F9 仅在窗口内有效")
 
+        self._apply_show_hotkey(notify=False)
+
         recovered = self.uploader.recover_interrupted()
         if recovered:
             logger.info("恢复了 %d 个中断的上传任务", recovered)
 
         self._drain_id = self.after(100, self._drain_ui_queue)
         self.after(300, self._auto_enqueue)
+        show_text = (
+            self.show_hotkey_spec.text
+            if self.show_hotkey_spec is not None
+            else None
+        )
         if tray_started:
             hint = (
                 "R2 录音机已在系统托盘运行 · 按 F9 开始录音，"
                 "双击托盘图标打开窗口"
             )
+            if show_text:
+                hint = (
+                    "R2 录音机已在系统托盘运行 · 按 F9 开始录音，"
+                    f"按 {show_text} 或双击托盘图标打开窗口"
+                )
         else:
             hint = "按 F9 可在任意窗口开始 / 停止录音"
+            if show_text:
+                hint += f"，按 {show_text} 显示窗口"
         self.after(600, lambda: self._notify(hint))
 
     # ------------------------------------------------------------------ 界面
@@ -144,7 +171,7 @@ class MainWindow(tk.Tk):
 
         settings_button = PillButton(
             header,
-            "R2 设置",
+            "设置",
             self._open_settings,
             theme=theme,
             width=100,
@@ -241,11 +268,7 @@ class MainWindow(tk.Tk):
         )
         self.record_button.pack()
 
-        hint = (
-            f"录音将以 {audio.recording_format_label()} 格式保存在本机，"
-            "配置成功后自动上传到 Cloudflare R2。"
-            "全局快捷键：F9 开始 / 停止（任意窗口可用）。"
-        )
+        hint = self._record_hint_text()
         if not audio.AUDIO_AVAILABLE:
             hint = (
                 "缺少音频库 sounddevice / numpy，无法录音。\n"
@@ -409,10 +432,108 @@ class MainWindow(tk.Tk):
 
     def _on_settings_saved(self) -> None:
         self._apply_config_state()
+        self._apply_show_hotkey()
         self.after(100, self._auto_enqueue)
 
     def _on_settings_closed(self) -> None:
         self._settings_dialog = None
+
+    # ------------------------------------------------------------------ 快捷键
+    def _load_show_hotkey_spec(self) -> HotkeySpec | None:
+        text = load_preferences().show_hotkey.strip()
+        if not text:
+            return None
+        try:
+            return parse_hotkey(text)
+        except ValueError as exc:
+            logger.warning(
+                "显示窗口快捷键设置无效（%s），改用默认值 %s",
+                exc,
+                DEFAULT_SHOW_HOTKEY,
+            )
+            try:
+                return parse_hotkey(DEFAULT_SHOW_HOTKEY)
+            except ValueError:
+                return None
+
+    def _apply_show_hotkey(self, *, notify: bool = True) -> None:
+        """读取偏好设置并重新注册“显示窗口”快捷键。"""
+        spec = self._load_show_hotkey_spec()
+        current = self.show_hotkey
+        if current is not None and current.active and spec == current.spec:
+            self.show_hotkey_spec = spec
+            self._update_hotkey_hint()
+            return
+
+        new_hotkey = None
+        if spec is not None:
+            candidate = GlobalHotkey(
+                self._on_show_hotkey,
+                spec,
+                SHOW_HOTKEY_ID,
+                "显示窗口快捷键",
+            )
+            if not candidate.start():
+                logger.warning("显示窗口快捷键 %s 注册失败", spec.text)
+                if current is not None and current.active:
+                    # 新快捷键不可用时继续沿用原来的，并把设置改回去。
+                    try:
+                        save_preferences(
+                            Preferences(show_hotkey=current.spec.text)
+                        )
+                    except Exception:
+                        logger.debug("写回快捷键设置失败", exc_info=True)
+                    if notify:
+                        self._notify(
+                            f"快捷键 {spec.text} 不可用，仍使用 {current.spec.text}",
+                            error=True,
+                            duration_ms=5000,
+                        )
+                elif notify:
+                    self._notify(
+                        f"无法注册快捷键 {spec.text}，可能已被其他程序占用",
+                        error=True,
+                        duration_ms=5000,
+                    )
+                return
+            new_hotkey = candidate
+
+        self.show_hotkey_spec = spec
+        self.show_hotkey = new_hotkey
+        if current is not None:
+            current.stop()
+        if notify:
+            if spec is not None:
+                self._notify(f"显示窗口快捷键：{spec.text}")
+            else:
+                self._notify("已关闭显示窗口快捷键")
+        self._update_hotkey_hint()
+
+    def _on_show_hotkey(self) -> None:
+        if self._closed:
+            return
+        logger.info("收到显示窗口快捷键")
+        self.post(self._show_from_tray)
+
+    def _record_hint_text(self) -> str:
+        text = (
+            f"录音将以 {audio.recording_format_label()} 格式保存在本机，"
+            "配置成功后自动上传到 Cloudflare R2。"
+            "全局快捷键：F9 开始 / 停止"
+        )
+        spec = self.show_hotkey_spec
+        if spec is not None:
+            text += f"；{spec.text} 显示窗口"
+        return text + "。"
+
+    def _update_hotkey_hint(self) -> None:
+        label = getattr(self, "hint_label", None)
+        if label is None or not audio.AUDIO_AVAILABLE:
+            return
+        try:
+            label.configure(text=self._record_hint_text())
+        except tk.TclError:
+            pass
 
     def _auto_enqueue(self) -> None:
         if self._closed or not read_config().is_complete:
@@ -844,8 +965,17 @@ class MainWindow(tk.Tk):
         try:
             self.deiconify()
             self.state("normal")
+            # 短暂置顶，确保从全局快捷键唤起时窗口真正来到前台。
+            self.attributes("-topmost", True)
             self.lift()
             self.focus_force()
+            self.after(300, self._drop_topmost)
+        except tk.TclError:
+            pass
+
+    def _drop_topmost(self) -> None:
+        try:
+            self.attributes("-topmost", False)
         except tk.TclError:
             pass
 
@@ -917,6 +1047,8 @@ class MainWindow(tk.Tk):
         self.player.stop()
         self.uploader.stop()
         self.hotkey.stop()
+        if self.show_hotkey is not None:
+            self.show_hotkey.stop()
         self.tray.stop()
         try:
             self.toast.hide()

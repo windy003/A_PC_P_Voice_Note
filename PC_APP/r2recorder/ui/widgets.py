@@ -6,6 +6,13 @@ import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk
 
+from ..hotkey import (
+    MOD_WIN,
+    HotkeySpec,
+    hotkey_name_for_vk,
+    is_win_key_pressed,
+    modifiers_from_state,
+)
 from .theme import Theme, UI_FONT
 
 
@@ -424,3 +431,190 @@ class ScrollFrame(tk.Frame):
             return float(self.canvas.yview()[0])
         except tk.TclError:
             return 0.0
+
+
+class HotkeyInput(tk.Frame):
+    """点击后按下组合键即可录制的快捷键输入框。"""
+
+    _MODIFIER_KEYSYMS = frozenset(
+        {
+            "Control_L",
+            "Control_R",
+            "Alt_L",
+            "Alt_R",
+            "Shift_L",
+            "Shift_R",
+            "Win_L",
+            "Win_R",
+            "Super_L",
+            "Super_R",
+            "Meta_L",
+            "Meta_R",
+        }
+    )
+
+    def __init__(
+        self,
+        master: tk.Misc,
+        theme: Theme,
+        *,
+        helper: str,
+        on_change=None,
+    ):
+        background = parent_bg(master)
+        super().__init__(master, bg=background)
+        self._theme = theme
+        self._helper = helper
+        self._on_change = on_change
+        self._spec: HotkeySpec | None = None
+        self._capturing = False
+
+        row = tk.Frame(self, bg=background)
+        row.pack(fill="x")
+
+        self._entry = tk.Entry(
+            row,
+            font=(UI_FONT, 10),
+            bg=theme.field,
+            fg=theme.on_surface_variant,
+            readonlybackground=theme.field,
+            insertbackground=theme.on_surface,
+            relief="flat",
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=theme.outline,
+            highlightcolor=theme.primary,
+            cursor="hand2",
+            takefocus=True,
+        )
+        self._entry.pack(side="left", fill="x", expand=True, ipady=6)
+        self._entry.bind("<Button-1>", self._begin_capture)
+        self._entry.bind("<KeyPress>", self._on_key_press)
+        self._entry.bind("<FocusOut>", self._on_focus_out)
+
+        self._clear_link = LinkButton(
+            row,
+            "清除",
+            self.clear,
+            theme=theme,
+            font=(UI_FONT, 8),
+        )
+        self._clear_link.pack(side="right", padx=(10, 0))
+
+        self._hint = tk.Label(
+            self,
+            text=helper,
+            font=(UI_FONT, 8),
+            fg=theme.on_surface_variant,
+            bg=background,
+            anchor="w",
+            justify="left",
+            wraplength=520,
+        )
+        self._hint.pack(fill="x", pady=(3, 0))
+
+        self._refresh_display()
+
+    # ------------------------------------------------------------------ 对外
+    def get_spec(self) -> HotkeySpec | None:
+        return self._spec
+
+    def set_spec(self, spec: HotkeySpec | None) -> None:
+        self._capturing = False
+        self._spec = spec
+        self._refresh_display()
+        self._set_hint(self._helper)
+
+    def clear(self) -> None:
+        self.set_spec(None)
+        if self._on_change is not None:
+            self._on_change(None)
+
+    # ------------------------------------------------------------------ 内部
+    def _set_hint(self, text: str, *, error: bool = False) -> None:
+        self._hint.configure(
+            text=text,
+            fg=self._theme.error if error else self._theme.on_surface_variant,
+        )
+
+    def _refresh_display(self) -> None:
+        text = self._spec.text if self._spec is not None else "未设置"
+        color = (
+            self._theme.on_surface
+            if self._spec is not None
+            else self._theme.on_surface_variant
+        )
+        self._entry.configure(state="normal", fg=color)
+        self._entry.delete(0, "end")
+        self._entry.insert(0, text)
+        self._entry.configure(
+            state="readonly",
+            highlightbackground=(
+                self._theme.primary if self._capturing else self._theme.outline
+            ),
+            highlightcolor=self._theme.primary,
+        )
+
+    def _begin_capture(self, _event=None) -> str:
+        if self._capturing:
+            return "break"
+        self._capturing = True
+        self._entry.configure(state="normal", fg=self._theme.on_surface_variant)
+        self._entry.delete(0, "end")
+        self._entry.insert(0, "请按下快捷键…")
+        self._entry.configure(
+            state="readonly",
+            highlightbackground=self._theme.primary,
+            highlightcolor=self._theme.primary,
+        )
+        self._set_hint("请按下新的快捷键组合；按 Esc 取消。")
+        try:
+            self._entry.focus_force()
+        except tk.TclError:
+            pass
+        return "break"
+
+    def _cancel_capture(self) -> None:
+        self._capturing = False
+        self._refresh_display()
+        self._set_hint(self._helper)
+
+    def _on_focus_out(self, _event=None) -> None:
+        if self._capturing:
+            self._cancel_capture()
+
+    def _on_key_press(self, event) -> str:
+        if not self._capturing:
+            return "break"
+        if event.keysym == "Escape":
+            self._cancel_capture()
+            return "break"
+        if event.keysym in self._MODIFIER_KEYSYMS:
+            return "break"
+
+        vk = int(event.keycode)
+        key_name = hotkey_name_for_vk(vk)
+        if key_name is None:
+            self._set_hint(
+                "不支持这个按键，请使用字母、数字、F 键或常用符号。",
+                error=True,
+            )
+            return "break"
+
+        mods = modifiers_from_state(int(event.state))
+        if is_win_key_pressed():
+            mods |= MOD_WIN
+        if not mods:
+            self._set_hint(
+                "需要至少一个修饰键（Ctrl / Alt / Shift / Win），请重新按下。",
+                error=True,
+            )
+            return "break"
+
+        self._spec = HotkeySpec(mods, vk, key_name)
+        self._capturing = False
+        self._refresh_display()
+        self._set_hint(self._helper)
+        if self._on_change is not None:
+            self._on_change(self._spec)
+        return "break"
