@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
+
+_FILE_TIME_RE = re.compile(r"rec-(\d{8})-(\d{6})")
 
 
 def duration(ms: int) -> str:
@@ -34,3 +37,17 @@ def display_name(timestamp_ms: int) -> str:
 
 def file_timestamp(timestamp_ms: int) -> str:
     return datetime.fromtimestamp(timestamp_ms / 1000.0).strftime("%Y%m%d-%H%M%S")
+
+
+def filename_time_ms(name: str) -> int | None:
+    """从录音文件名（rec-YYYYMMDD-HHMMSS）解析时间，无法解析时返回 None。"""
+    match = _FILE_TIME_RE.search(name)
+    if match is None:
+        return None
+    try:
+        stamp = datetime.strptime(
+            match.group(1) + match.group(2), "%Y%m%d%H%M%S"
+        )
+    except ValueError:
+        return None
+    return int(stamp.timestamp() * 1000)

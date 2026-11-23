@@ -29,6 +29,8 @@
     <string name="config_missing_desc">录音会保存在本机，配置后才能上传。</string>
     <string name="config_action">去配置</string>
     <string name="recordings_title">录音记录</string>
+    <string name="sort_ascending">时间正序 ↑</string>
+    <string name="sort_descending">时间倒序 ↓</string>
     <string name="recording_count">%1$d 条</string>
     <string name="recording_meta">%1$s · %2$s · %3$s · %4$s</string>
     <string name="empty_recordings">还没有录音\n点击上方按钮开始</string>

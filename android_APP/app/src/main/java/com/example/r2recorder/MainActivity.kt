@@ -57,6 +57,7 @@ class MainActivity : AppCompatActivity(), RecordingAdapter.Callbacks {
     private var syncJob: Job? = null
     private var syncSuccessNotified = false
     private var startingRecording = false
+    private var sortDescending = false
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -85,6 +86,7 @@ class MainActivity : AppCompatActivity(), RecordingAdapter.Callbacks {
 
         binding.btnRecord.setOnClickListener { onRecordButtonClick() }
         binding.btnConfigure.setOnClickListener { openSettings() }
+        binding.btnSort.setOnClickListener { toggleSort() }
         binding.toolbar.setOnMenuItemClickListener { item ->
             when (item.itemId) {
                 R.id.action_settings -> {
@@ -102,10 +104,7 @@ class MainActivity : AppCompatActivity(), RecordingAdapter.Callbacks {
         }
 
         repository.items.observe(this) { items ->
-            adapter.submitList(items)
-            binding.tvCount.isVisible = items.isNotEmpty()
-            binding.tvCount.text = getString(R.string.recording_count, items.size)
-            binding.tvEmpty.isVisible = items.isEmpty()
+            renderItems(items)
         }
 
         lifecycleScope.launch {
@@ -208,6 +207,32 @@ class MainActivity : AppCompatActivity(), RecordingAdapter.Callbacks {
             renderRecordingState(RecorderState.state.value)
             showMessage(getString(R.string.record_save_failed))
         }
+    }
+
+    private fun renderItems(items: List<Recording>) {
+        val ordered = sortRecordings(items)
+        adapter.submitList(ordered)
+        binding.tvCount.isVisible = ordered.isNotEmpty()
+        binding.tvCount.text = getString(R.string.recording_count, ordered.size)
+        binding.tvEmpty.isVisible = ordered.isEmpty()
+        binding.btnSort.setText(
+            if (sortDescending) R.string.sort_descending else R.string.sort_ascending
+        )
+    }
+
+    private fun sortRecordings(items: List<Recording>): List<Recording> {
+        val ordered = items.sortedWith(
+            compareBy<Recording> {
+                Formats.filenameTimeMs(it.fileName) ?: it.createdAt
+            }.thenBy { it.fileName }
+        )
+        return if (sortDescending) ordered.reversed() else ordered
+    }
+
+    private fun toggleSort() {
+        sortDescending = !sortDescending
+        renderItems(repository.snapshot())
+        binding.recycler.scrollToPosition(0)
     }
 
     private fun renderRecordingState(state: RecorderState.State) {

@@ -79,6 +79,7 @@ class MainWindow(tk.Tk):
         self._record_busy = False
         self._closed = False
         self._tray_hint_shown = False
+        self._sort_descending = False
         self._want_maximized = True
         self.restart_requested = False
         self._status_cache: dict[str, tuple[UploadStatus, str | None]] = {}
@@ -316,6 +317,15 @@ class MainWindow(tk.Tk):
             anchor="e",
         )
         self.count_label.pack(side="right")
+
+        self.sort_link = LinkButton(
+            list_header,
+            self._sort_label(),
+            self._toggle_sort,
+            theme=theme,
+            font=(UI_FONT, 9),
+        )
+        self.sort_link.pack(side="right", padx=(0, 12))
 
         # 录音列表
         self.scroll = ScrollFrame(self, theme)
@@ -749,11 +759,12 @@ class MainWindow(tk.Tk):
     def _refresh_records(self, items: list[Recording]) -> None:
         if self._closed:
             return
+        ordered = self._sort_recordings(items)
         position = self.scroll.view_position()
         for child in self.scroll.inner.winfo_children():
             child.destroy()
 
-        if not items:
+        if not ordered:
             tk.Label(
                 self.scroll.inner,
                 text="还没有录音\n点击上方按钮开始",
@@ -763,12 +774,31 @@ class MainWindow(tk.Tk):
                 justify="center",
             ).pack(pady=60)
         else:
-            for recording in items:
+            for recording in ordered:
                 self._build_card(self.scroll.inner, recording)
 
-        self.count_label.configure(text=f"{len(items)} 条" if items else "")
+        self.count_label.configure(text=f"{len(ordered)} 条" if ordered else "")
         self.scroll.canvas.yview_moveto(position)
-        self._notify_status_changes(items)
+        self._notify_status_changes(ordered)
+
+    def _sort_label(self) -> str:
+        return "时间倒序 ↓" if self._sort_descending else "时间正序 ↑"
+
+    def _sort_recordings(self, items: list[Recording]) -> list[Recording]:
+        def sort_key(recording: Recording) -> tuple[int, str]:
+            stamp = formats.filename_time_ms(recording.file_name)
+            return (
+                stamp if stamp is not None else recording.created_at,
+                recording.file_name,
+            )
+
+        return sorted(items, key=sort_key, reverse=self._sort_descending)
+
+    def _toggle_sort(self) -> None:
+        self._sort_descending = not self._sort_descending
+        self.sort_link.set_text(self._sort_label())
+        self._refresh_records(self.repository.snapshot())
+        self.scroll.scroll_to_top()
 
     def _notify_status_changes(self, items: list[Recording]) -> None:
         for recording in items:
