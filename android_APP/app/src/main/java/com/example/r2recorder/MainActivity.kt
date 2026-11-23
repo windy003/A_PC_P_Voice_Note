@@ -374,12 +374,12 @@ class MainActivity : AppCompatActivity(), RecordingAdapter.Callbacks {
                 SyncManager.sync(this@MainActivity)
             }
             if (isFinishing || isDestroyed) return@launch
-            val (text, isError) = SyncManager.formatResult(result)
-            Snackbar.make(
-                binding.root,
-                text,
-                if (isError) Snackbar.LENGTH_LONG else Snackbar.LENGTH_SHORT
-            ).show()
+            // onResume 可能被多次调用（例如权限弹窗、从设置页返回、重新打开应用），
+            // 每次都会重新同步；但成功提示只在本进程的第一次成功同步后显示一次。
+            if (!result.connected || syncSuccessNotified) return@launch
+            syncSuccessNotified = true
+            val (text, _) = SyncManager.formatResult(result)
+            Snackbar.make(binding.root, text, Snackbar.LENGTH_SHORT).show()
         }
     }
 
@@ -419,5 +419,10 @@ class MainActivity : AppCompatActivity(), RecordingAdapter.Callbacks {
 
     private fun showMessage(message: String) {
         Snackbar.make(binding.root, message, Snackbar.LENGTH_LONG).show()
+    }
+
+    companion object {
+        // 进程级标记：保证自动下行同步的成功提示在一次应用运行中只出现一次。
+        private var syncSuccessNotified = false
     }
 }

@@ -15,9 +15,19 @@ import java.util.concurrent.TimeUnit
 object UploadManager {
     private const val WORK_NAME_PREFIX = "r2-upload-"
 
-    fun enqueue(context: Context, recordingId: String, replace: Boolean = false) {
+    fun enqueue(
+        context: Context,
+        recordingId: String,
+        replace: Boolean = false,
+        notifyUser: Boolean = false
+    ) {
         val request = OneTimeWorkRequestBuilder<UploadWorker>()
-            .setInputData(workDataOf(UploadWorker.KEY_RECORDING_ID to recordingId))
+            .setInputData(
+                workDataOf(
+                    UploadWorker.KEY_RECORDING_ID to recordingId,
+                    UploadWorker.KEY_NOTIFY_USER to notifyUser
+                )
+            )
             .setConstraints(
                 Constraints.Builder()
                     .setRequiredNetworkType(NetworkType.CONNECTED)

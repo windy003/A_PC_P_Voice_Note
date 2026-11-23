@@ -26,6 +26,7 @@ import com.example.r2recorder.data.SettingsStore
 import com.example.r2recorder.data.UploadStatus
 import com.example.r2recorder.upload.UploadManager
 import com.example.r2recorder.util.Formats
+import com.example.r2recorder.util.Toasts
 import java.io.File
 import java.util.UUID
 
@@ -142,11 +143,15 @@ class RecordingService : Service() {
                 sizeBytes = file.length(),
                 status = UploadStatus.LOCAL
             )
-            RecordingRepository.get(this).add(item)
+            val repository = RecordingRepository.get(this)
+            repository.add(item)
+            val total = repository.snapshot().size
             if (SettingsStore(this).configOrNull() != null) {
-                UploadManager.enqueue(this, item.id)
+                UploadManager.enqueue(this, item.id, notifyUser = true)
+                Toasts.show(this, getString(R.string.record_saved_uploading))
+            } else {
+                Toasts.show(this, getString(R.string.record_saved_local_only, total))
             }
-            Toast.makeText(this, R.string.record_saved, Toast.LENGTH_SHORT).show()
         } else {
             val tooShort = startElapsed > 0 &&
                 SystemClock.elapsedRealtime() - startElapsed < 1000

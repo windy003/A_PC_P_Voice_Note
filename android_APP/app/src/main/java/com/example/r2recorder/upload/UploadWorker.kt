@@ -8,6 +8,7 @@ import com.example.r2recorder.data.RecordingRepository
 import com.example.r2recorder.data.SettingsStore
 import com.example.r2recorder.data.UploadStatus
 import com.example.r2recorder.r2.R2Client
+import com.example.r2recorder.util.Toasts
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.IOException
@@ -31,6 +32,7 @@ class UploadWorker(
                     error = applicationContext.getString(R.string.upload_error_no_config)
                 )
             }
+            notifyResult(success = false)
             return@withContext Result.failure()
         }
 
@@ -42,6 +44,7 @@ class UploadWorker(
                     error = applicationContext.getString(R.string.upload_error_file_missing)
                 )
             }
+            notifyResult(success = false)
             return@withContext Result.failure()
         }
 
@@ -65,6 +68,7 @@ class UploadWorker(
                     error = null
                 )
             }
+            notifyResult(success = true)
             Result.success()
         } catch (e: R2Client.R2Exception) {
             val message = applicationContext.getString(
@@ -82,6 +86,7 @@ class UploadWorker(
                 Result.retry()
             } else {
                 repository.update(id) { it.copy(status = UploadStatus.FAILED, error = message) }
+                notifyResult(success = false)
                 Result.failure()
             }
         } catch (e: IOException) {
@@ -99,16 +104,29 @@ class UploadWorker(
                 Result.retry()
             } else {
                 repository.update(id) { it.copy(status = UploadStatus.FAILED, error = message) }
+                notifyResult(success = false)
                 Result.failure()
             }
         } catch (e: Exception) {
             val message = e.message ?: applicationContext.getString(R.string.unknown_error)
             repository.update(id) { it.copy(status = UploadStatus.FAILED, error = message) }
+            notifyResult(success = false)
             Result.failure()
         }
     }
 
+    private fun notifyResult(success: Boolean) {
+        if (!inputData.getBoolean(KEY_NOTIFY_USER, false)) return
+        val count = RecordingRepository.get(applicationContext).snapshot().size
+        val message = applicationContext.getString(
+            if (success) R.string.upload_result_success else R.string.upload_result_failure,
+            count
+        )
+        Toasts.show(applicationContext, message, long = true)
+    }
+
     companion object {
         const val KEY_RECORDING_ID = "recording_id"
+        const val KEY_NOTIFY_USER = "notify_user"
     }
 }
