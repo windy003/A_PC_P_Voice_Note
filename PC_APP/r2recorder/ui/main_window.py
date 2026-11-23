@@ -71,6 +71,7 @@ class MainWindow(tk.Tk):
         self._record_busy = False
         self._closed = False
         self._tray_hint_shown = False
+        self._want_maximized = True
         self.restart_requested = False
         self._status_cache: dict[str, tuple[UploadStatus, str | None]] = {}
         self.show_hotkey: GlobalHotkey | None = None
@@ -80,7 +81,7 @@ class MainWindow(tk.Tk):
         self.configure(bg=theme.surface)
         self._apply_window_icon()
         self.minsize(600, 640)
-        self._center()
+        self._maximize_window()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self._build()
@@ -331,14 +332,31 @@ class MainWindow(tk.Tk):
         self.toast = Toast(self, theme)
         self.global_toast = GlobalToast(self, theme)
         self.bind("<F9>", self._on_hotkey)
+        self.bind("<Configure>", self._on_window_configure, add="+")
 
-    def _center(self) -> None:
+    def _maximize_window(self) -> None:
+        """默认以最大化状态打开窗口。"""
         self.update_idletasks()
-        width = 760
-        height = min(860, self.winfo_screenheight() - 120)
-        x = max(0, (self.winfo_screenwidth() - width) // 2)
-        y = max(0, (self.winfo_screenheight() - height) // 2)
-        self.geometry(f"{width}x{height}+{x}+{y}")
+        try:
+            self.state("zoomed")
+        except tk.TclError:
+            try:
+                self.attributes("-zoomed", True)
+            except tk.TclError:
+                pass
+
+    def _on_window_configure(self, event) -> None:
+        """记录用户手动最大化 / 还原的状态，下次唤起时保持一致。"""
+        if event.widget is not self or self._closed:
+            return
+        try:
+            if not self.winfo_viewable():
+                return
+            state = self.state()
+        except tk.TclError:
+            return
+        if state in ("normal", "zoomed"):
+            self._want_maximized = state == "zoomed"
 
     def _apply_window_icon(self) -> None:
         """任务栏 / 标题栏图标使用与托盘一致的麦克风图标。"""
@@ -964,7 +982,11 @@ class MainWindow(tk.Tk):
             return
         try:
             self.deiconify()
-            self.state("normal")
+            # 恢复用户上次的窗口状态；默认最大化。
+            if self._want_maximized:
+                self.state("zoomed")
+            else:
+                self.state("normal")
             # 短暂置顶，确保从全局快捷键唤起时窗口真正来到前台。
             self.attributes("-topmost", True)
             self.lift()
