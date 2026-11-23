@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import queue
 import threading
+import time
 import tkinter as tk
 import uuid
 import webbrowser
@@ -28,6 +29,7 @@ from ..prefs import (
     load_preferences,
     save_preferences,
 )
+from ..sync import SyncManager
 from ..upload import UploadManager
 from ..util import open_path
 from .settings_dialog import SettingsDialog
@@ -62,6 +64,12 @@ class MainWindow(tk.Tk):
         self.recorder = audio.Recorder()
         self.player = audio.Player(CACHE_DIR)
         self.uploader = UploadManager(self.repository, self._config_provider)
+        self.sync_manager = SyncManager(
+            self.repository,
+            self._config_provider,
+            self.post,
+            self._on_sync_message,
+        )
 
         self._ui_queue: queue.Queue[Callable[[], None]] = queue.Queue()
         self._drain_id: str | None = None
@@ -74,6 +82,7 @@ class MainWindow(tk.Tk):
         self._want_maximized = True
         self.restart_requested = False
         self._status_cache: dict[str, tuple[UploadStatus, str | None]] = {}
+        self._last_sync_request = 0.0
         self.show_hotkey: GlobalHotkey | None = None
         self.show_hotkey_spec = self._load_show_hotkey_spec()
 
@@ -122,6 +131,7 @@ class MainWindow(tk.Tk):
 
         self._drain_id = self.after(100, self._drain_ui_queue)
         self.after(300, self._auto_enqueue)
+        self.after(1300, self._request_cloud_sync)
         show_text = (
             self.show_hotkey_spec.text
             if self.show_hotkey_spec is not None
@@ -333,6 +343,7 @@ class MainWindow(tk.Tk):
         self.global_toast = GlobalToast(self, theme)
         self.bind("<F9>", self._on_hotkey)
         self.bind("<Configure>", self._on_window_configure, add="+")
+        self.bind("<Map>", self._on_window_map, add="+")
 
     def _maximize_window(self) -> None:
         """默认以最大化状态打开窗口。"""
@@ -452,9 +463,34 @@ class MainWindow(tk.Tk):
         self._apply_config_state()
         self._apply_show_hotkey()
         self.after(100, self._auto_enqueue)
+        self.sync_manager.request_sync(notify=True)
 
     def _on_settings_closed(self) -> None:
         self._settings_dialog = None
+
+    def _on_sync_message(self, text: str, error: bool) -> None:
+        if self._closed:
+            return
+        self._notify(
+            text,
+            error=error,
+            duration_ms=5000 if error else 4000,
+        )
+
+    def _request_cloud_sync(self) -> None:
+        """打开应用、从托盘唤醒或窗口重新显示时触发一次同步（2 秒内去重）。"""
+        if self._closed:
+            return
+        now = time.monotonic()
+        if now - self._last_sync_request < 2.0:
+            return
+        self._last_sync_request = now
+        self.sync_manager.request_sync(notify=True)
+
+    def _on_window_map(self, event) -> None:
+        if event.widget is not self or self._closed:
+            return
+        self._request_cloud_sync()
 
     # ------------------------------------------------------------------ 快捷键
     def _load_show_hotkey_spec(self) -> HotkeySpec | None:
@@ -931,7 +967,8 @@ class MainWindow(tk.Tk):
     def _delete(self, recording: Recording) -> None:
         if not messagebox.askyesno(
             "删除录音",
-            "只会删除本机的文件，R2 上已上传的文件不会被删除。确定删除吗？",
+            "将同时删除本机和 Cloudflare R2 上的文件，其他设备下次同步时也会删除。"
+            "确定删除吗？",
             parent=self,
         ):
             return
@@ -941,9 +978,25 @@ class MainWindow(tk.Tk):
         try:
             recording.local_path.unlink(missing_ok=True)
         except OSError:
-            logger.warning("删除录音文件失败：%s", recording.local_path, exc_info=True)
+            logger.warning(
+                "删除录音文件失败：%s", recording.local_path, exc_info=True
+            )
         self.repository.delete(recording.id)
-        self._notify("已删除录音")
+
+        was_remote = bool(recording.object_key) or recording.status in (
+            UploadStatus.UPLOADING,
+            UploadStatus.UPLOADED,
+        )
+        if was_remote:
+            key = recording.object_key or read_config().object_key_for(
+                recording.file_name
+            )
+            self.sync_manager.delete_remote(
+                key,
+                formats.display_name(recording.created_at),
+            )
+        else:
+            self._notify("已删除本地录音（未上传过）")
 
     # ------------------------------------------------------------------ 托盘 / 退出
     def _is_visible(self) -> bool:
@@ -977,7 +1030,7 @@ class MainWindow(tk.Tk):
             except tk.TclError:
                 pass
 
-    def _show_from_tray(self) -> None:
+    def _show_from_tray(self, *, trigger_sync: bool = True) -> None:
         if self._closed:
             return
         try:
@@ -994,6 +1047,9 @@ class MainWindow(tk.Tk):
             self.after(300, self._drop_topmost)
         except tk.TclError:
             pass
+        if trigger_sync:
+            # 从系统托盘 / 全局快捷键唤醒也算“打开应用”，做一次云端同步。
+            self._request_cloud_sync()
 
     def _drop_topmost(self) -> None:
         try:
@@ -1003,7 +1059,7 @@ class MainWindow(tk.Tk):
 
     def _show_for_dialog(self) -> None:
         if not self._is_visible():
-            self._show_from_tray()
+            self._show_from_tray(trigger_sync=False)
 
     def _on_quit_hotkey(self, _event=None) -> str:
         self._quit_app()
@@ -1068,6 +1124,7 @@ class MainWindow(tk.Tk):
             self._drain_id = None
         self.player.stop()
         self.uploader.stop()
+        self.sync_manager.shutdown()
         self.hotkey.stop()
         if self.show_hotkey is not None:
             self.show_hotkey.stop()

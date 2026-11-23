@@ -13,7 +13,7 @@ data class R2Config(
     val endpointHost: String
         get() = "$accountId.r2.cloudflarestorage.com"
 
-    private val normalizedPrefix: String
+    val normalizedPrefix: String
         get() {
             var prefix = keyPrefix.trim().replace('\\', '/')
             while (prefix.startsWith("/")) prefix = prefix.substring(1)

@@ -43,8 +43,10 @@
 
     <string name="playback_failed">无法播放这个录音</string>
     <string name="delete_title">删除录音</string>
-    <string name="delete_message">只会删除手机上的文件，R2 上已上传的文件不会被删除。确定删除吗？</string>
+    <string name="delete_message">将同时删除手机和 R2 上的文件，其他设备下次同步时也会删除。确定删除吗？</string>
     <string name="delete_confirm">删除</string>
+    <string name="delete_local_only">已删除本地录音（未上传过）</string>
+    <string name="delete_cloud_unavailable">已删除本地；无法确定云端对象，未删除云端副本</string>
     <string name="cancel">取消</string>
     <string name="open_url_failed">没有可打开的应用</string>
     <string name="retry_queued">已加入上传队列</string>

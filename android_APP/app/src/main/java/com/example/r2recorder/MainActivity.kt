@@ -26,18 +26,23 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import com.example.r2recorder.data.Recording
 import com.example.r2recorder.data.RecordingRepository
 import com.example.r2recorder.data.SettingsStore
+import com.example.r2recorder.data.UploadStatus
 import com.example.r2recorder.databinding.ActivityMainBinding
 import com.example.r2recorder.recorder.RecorderState
 import com.example.r2recorder.recorder.RecordingService
+import com.example.r2recorder.sync.PendingDeletes
+import com.example.r2recorder.sync.SyncManager
 import com.example.r2recorder.ui.RecordingAdapter
 import com.example.r2recorder.upload.UploadManager
 import com.example.r2recorder.util.Formats
 import com.google.android.material.snackbar.Snackbar
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : AppCompatActivity(), RecordingAdapter.Callbacks {
 
@@ -49,6 +54,7 @@ class MainActivity : AppCompatActivity(), RecordingAdapter.Callbacks {
     private var player: MediaPlayer? = null
     private var playingId: String? = null
     private var tickerJob: Job? = null
+    private var syncJob: Job? = null
     private var startingRecording = false
 
     private val permissionLauncher = registerForActivityResult(
@@ -114,6 +120,7 @@ class MainActivity : AppCompatActivity(), RecordingAdapter.Callbacks {
         binding.configBanner.isVisible = !configured
         if (configured) {
             UploadManager.enqueuePendingLocal(this)
+            startCloudSync()
         }
     }
 
@@ -319,13 +326,61 @@ class MainActivity : AppCompatActivity(), RecordingAdapter.Callbacks {
             .setMessage(R.string.delete_message)
             .setNegativeButton(R.string.cancel, null)
             .setPositiveButton(R.string.delete_confirm) { _, _ ->
-                if (playingId == recording.id) {
-                    releasePlayer()
-                }
-                recording.localFile(this).delete()
-                repository.delete(recording.id)
+                deleteRecording(recording)
             }
             .show()
+    }
+
+    private fun deleteRecording(recording: Recording) {
+        if (playingId == recording.id) {
+            releasePlayer()
+        }
+        UploadManager.cancel(this, recording.id)
+
+        val config = settingsStore.configOrNull()
+        val remoteKey = recording.objectKey ?: config?.objectKeyFor(recording.fileName)
+        val wasRemote = !recording.objectKey.isNullOrBlank() ||
+            recording.status == UploadStatus.UPLOADED ||
+            recording.status == UploadStatus.UPLOADING
+
+        recording.localFile(this).delete()
+        repository.delete(recording.id)
+
+        if (wasRemote && remoteKey != null) {
+            // 先落盘再删云端：即使进程中途退出，下次同步也会继续删除。
+            PendingDeletes.add(this, remoteKey)
+            lifecycleScope.launch {
+                val (text, isError) = withContext(Dispatchers.IO) {
+                    SyncManager.deleteCloudCopy(this@MainActivity, remoteKey)
+                }
+                if (isFinishing || isDestroyed) return@launch
+                Snackbar.make(
+                    binding.root,
+                    text,
+                    if (isError) Snackbar.LENGTH_LONG else Snackbar.LENGTH_SHORT
+                ).show()
+            }
+        } else if (wasRemote) {
+            showMessage(R.string.delete_cloud_unavailable)
+        } else {
+            showMessage(R.string.delete_local_only)
+        }
+    }
+
+    private fun startCloudSync() {
+        if (syncJob?.isActive == true) return
+        syncJob = lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                SyncManager.sync(this@MainActivity)
+            }
+            if (isFinishing || isDestroyed) return@launch
+            val (text, isError) = SyncManager.formatResult(result)
+            Snackbar.make(
+                binding.root,
+                text,
+                if (isError) Snackbar.LENGTH_LONG else Snackbar.LENGTH_SHORT
+            ).show()
+        }
     }
 
     private fun retryAllUploads() {

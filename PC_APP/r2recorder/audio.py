@@ -24,6 +24,7 @@ except Exception:  # pragma: no cover - 环境相关
 
 AUDIO_AVAILABLE = sd is not None and np is not None
 FFMPEG_PATH = shutil.which("ffmpeg")
+FFPROBE_PATH = shutil.which("ffprobe")
 
 _CREATE_NO_WINDOW = 0
 if sys.platform == "win32":
@@ -40,6 +41,44 @@ def ffmpeg_available() -> bool:
 
 def recording_format_label() -> str:
     return "M4A（AAC）" if ffmpeg_available() else "WAV（PCM）"
+
+
+def probe_duration_ms(path: str | Path) -> int:
+    """读取音频时长；无法判断时返回 0。"""
+    path = Path(path)
+    try:
+        if path.suffix.lower() == ".wav":
+            with wave.open(str(path), "rb") as handle:
+                rate = handle.getframerate()
+                if rate > 0:
+                    return max(0, int(handle.getnframes() * 1000 / rate))
+    except Exception:
+        pass
+    if FFPROBE_PATH:
+        try:
+            result = subprocess.run(
+                [
+                    FFPROBE_PATH,
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "default=nw=1:nk=1",
+                    str(path),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                creationflags=_CREATE_NO_WINDOW,
+            )
+            if result.returncode == 0:
+                text = (result.stdout or "").strip()
+                if text:
+                    return max(0, int(float(text) * 1000))
+        except Exception:
+            pass
+    return 0
 
 
 class Recorder:

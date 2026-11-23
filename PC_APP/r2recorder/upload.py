@@ -166,6 +166,17 @@ class UploadManager:
                 self._fail(recording_id, str(exc) or "未知错误")
                 return
             else:
+                if self._repository.get(recording_id) is None:
+                    # 上传过程中这条录音被删除了，把刚上传的对象再删掉。
+                    try:
+                        r2.delete_object(config, object_key)
+                    except Exception:
+                        logger.warning(
+                            "清理已删除录音的云端对象失败：%s",
+                            object_key,
+                            exc_info=True,
+                        )
+                    return
                 self._repository.update(
                     recording_id,
                     lambda item: replace(
@@ -173,6 +184,8 @@ class UploadManager:
                         status=UploadStatus.UPLOADED,
                         object_key=object_key,
                         remote_url=config.public_url_for(object_key),
+                        remote_bucket=config.bucket,
+                        remote_prefix=config.normalized_prefix,
                         error=None,
                     ),
                 )

@@ -38,6 +38,11 @@ object UploadManager {
         enqueue(context, recordingId, replace = true)
     }
 
+    fun cancel(context: Context, recordingId: String) {
+        WorkManager.getInstance(context)
+            .cancelUniqueWork(WORK_NAME_PREFIX + recordingId)
+    }
+
     fun enqueuePendingLocal(context: Context): Int {
         val repository = RecordingRepository.get(context)
         var count = 0

@@ -20,7 +20,9 @@ data class Recording(
     val status: UploadStatus,
     val objectKey: String? = null,
     val remoteUrl: String? = null,
-    val error: String? = null
+    val error: String? = null,
+    val remoteBucket: String? = null,
+    val remotePrefix: String? = null
 ) {
     fun localFile(context: Context): File = File(recordingsDir(context), fileName)
 
@@ -34,6 +36,8 @@ data class Recording(
         put("objectKey", objectKey ?: JSONObject.NULL)
         put("remoteUrl", remoteUrl ?: JSONObject.NULL)
         put("error", error ?: JSONObject.NULL)
+        put("remoteBucket", remoteBucket ?: JSONObject.NULL)
+        put("remotePrefix", remotePrefix ?: JSONObject.NULL)
     }
 
     companion object {
@@ -52,7 +56,9 @@ data class Recording(
                         .getOrDefault(UploadStatus.LOCAL),
                     objectKey = json.optStringOrNull("objectKey"),
                     remoteUrl = json.optStringOrNull("remoteUrl"),
-                    error = json.optStringOrNull("error")
+                    error = json.optStringOrNull("error"),
+                    remoteBucket = json.optStringOrNull("remoteBucket"),
+                    remotePrefix = json.optStringOrNull("remotePrefix")
                 )
             } catch (_: Exception) {
                 null

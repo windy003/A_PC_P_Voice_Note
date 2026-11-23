@@ -5,7 +5,11 @@ from __future__ import annotations
 import hashlib
 import hmac
 import http.client
+import os
 import re
+import tempfile
+import xml.etree.ElementTree as ElementTree
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from html import unescape
 from pathlib import Path
@@ -18,6 +22,7 @@ REGION = "auto"
 SERVICE = "s3"
 EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
 TIMEOUT_SECONDS = 300
+LIST_PAGE_SIZE = 1000
 
 _CONTENT_TYPES = {
     ".m4a": "audio/mp4",
@@ -245,3 +250,170 @@ def test_connection(config: R2Config) -> None:
         "GET",
         query={"list-type": "2", "max-keys": "1"},
     )
+
+
+# ---------------------------------------------------------------------- 同步
+@dataclass(frozen=True)
+class RemoteObject:
+    key: str
+    size: int
+    last_modified_ms: int
+
+
+def _local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def _parse_iso_ms(value: str) -> int:
+    text = value.strip()
+    if not text:
+        return 0
+    try:
+        return int(
+            datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp() * 1000
+        )
+    except ValueError:
+        return 0
+
+
+def parse_list_response(data: bytes) -> tuple[list[RemoteObject], str | None]:
+    """解析 ListObjectsV2 的 XML，返回 (对象列表, 下一页 token)。"""
+    try:
+        root = ElementTree.fromstring(data)
+    except ElementTree.ParseError as exc:
+        raise R2Error(200, f"无法解析对象列表：{exc}") from None
+
+    objects: list[RemoteObject] = []
+    truncated = False
+    token: str | None = None
+    for node in root.iter():
+        name = _local_name(node.tag)
+        if name == "Contents":
+            key = ""
+            size = 0
+            modified = 0
+            for child in node:
+                child_name = _local_name(child.tag)
+                if child_name == "Key":
+                    key = child.text or ""
+                elif child_name == "Size":
+                    try:
+                        size = int(child.text or 0)
+                    except ValueError:
+                        size = 0
+                elif child_name == "LastModified":
+                    modified = _parse_iso_ms(child.text or "")
+            if key:
+                objects.append(RemoteObject(key, size, modified))
+        elif name == "IsTruncated":
+            truncated = (node.text or "").strip().lower() == "true"
+        elif name == "NextContinuationToken":
+            token = node.text
+    return objects, (token if truncated and token else None)
+
+
+def list_objects(
+    config: R2Config,
+    prefix: str | None = None,
+) -> list[RemoteObject]:
+    """列出前缀下的全部对象（自动翻页）。"""
+    if not config.is_complete:
+        raise ValueError("R2 配置不完整")
+    results: list[RemoteObject] = []
+    token: str | None = None
+    while True:
+        query = {"list-type": "2", "max-keys": str(LIST_PAGE_SIZE)}
+        if prefix:
+            query["prefix"] = prefix
+        if token:
+            query["continuation-token"] = token
+        data = _request(config, "GET", query=query)
+        objects, next_token = parse_list_response(data)
+        results.extend(objects)
+        if not next_token:
+            break
+        token = next_token
+    return results
+
+
+def download(config: R2Config, object_key: str, dest_path: str | Path) -> None:
+    """把对象下载到本地文件；先写临时文件，成功后再替换。"""
+    if not config.is_complete:
+        raise ValueError("R2 配置不完整")
+    target = Path(dest_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    host, canonical_uri = _build_target(config, object_key)
+    amz_date, authorization, canonical_query = _sign(
+        config, "GET", canonical_uri, {}, EMPTY_SHA256, None
+    )
+    path = canonical_uri
+    if canonical_query:
+        path += "?" + canonical_query
+    headers = {
+        "Host": host,
+        "x-amz-date": amz_date,
+        "x-amz-content-sha256": EMPTY_SHA256,
+        "Authorization": authorization,
+    }
+
+    connection = http.client.HTTPSConnection(host, timeout=TIMEOUT_SECONDS)
+    fd, temp_path = tempfile.mkstemp(
+        prefix=".download.", dir=str(target.parent)
+    )
+    try:
+        connection.request("GET", path, headers=headers)
+        response = connection.getresponse()
+        if response.status >= 300:
+            data = response.read()
+            raise R2Error(
+                response.status, _extract_error(data, response.reason)
+            )
+        with os.fdopen(fd, "wb") as handle:
+            fd = -1
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                handle.write(chunk)
+        os.replace(temp_path, target)
+    except R2Error:
+        raise
+    except (OSError, http.client.HTTPException) as exc:
+        raise R2NetworkError(str(exc) or exc.__class__.__name__) from None
+    finally:
+        connection.close()
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        try:
+            os.unlink(temp_path)
+        except FileNotFoundError:
+            pass
+
+
+def delete_object(config: R2Config, object_key: str) -> None:
+    """删除对象；对象本来就不存在（404）时视为成功。"""
+    if not config.is_complete:
+        raise ValueError("R2 配置不完整")
+    try:
+        _request(config, "DELETE", object_key=object_key)
+    except R2Error as exc:
+        if exc.code == 404:
+            return
+        raise
+
+
+def object_exists(config: R2Config, object_key: str) -> bool:
+    """确认对象是否仍存在；404 返回 False。"""
+    if not config.is_complete:
+        raise ValueError("R2 配置不完整")
+    try:
+        _request(config, "HEAD", object_key=object_key)
+    except R2Error as exc:
+        if exc.code == 404:
+            return False
+        raise
+    return True

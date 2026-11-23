@@ -39,14 +39,18 @@ class SettingsStore(context: Context) {
     }
 
     fun save(config: R2Config) {
-        prefs.edit()
+        val saved = prefs.edit()
             .putString(KEY_ACCOUNT_ID, config.accountId.trim())
             .putString(KEY_BUCKET, config.bucket.trim())
             .putString(KEY_ACCESS_KEY, cipher.encrypt(config.accessKeyId.trim()))
             .putString(KEY_SECRET, cipher.encrypt(config.secretAccessKey.trim()))
             .putString(KEY_PUBLIC_URL, config.publicBaseUrl.trim())
             .putString(KEY_PREFIX, config.keyPrefix.trim())
-            .apply()
+            // 同步写入磁盘，避免保存后马上更新/退出时还没落盘。
+            .commit()
+        if (!saved) {
+            throw IllegalStateException("写入 SharedPreferences 失败")
+        }
     }
 
     private class SecretCipher {

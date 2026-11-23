@@ -50,11 +50,18 @@ class UploadWorker(
 
         try {
             R2Client.upload(config, file, objectKey)
+            if (repository.get(id) == null) {
+                // 上传过程中这条录音被删除了，把刚上传的对象再删掉。
+                runCatching { R2Client.deleteObject(config, objectKey) }
+                return@withContext Result.success()
+            }
             repository.update(id) {
                 it.copy(
                     status = UploadStatus.UPLOADED,
                     objectKey = objectKey,
                     remoteUrl = config.publicUrlFor(objectKey),
+                    remoteBucket = config.bucket,
+                    remotePrefix = config.normalizedPrefix,
                     error = null
                 )
             }
