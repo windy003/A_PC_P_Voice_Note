@@ -1,7 +1,6 @@
 package com.example.r2recorder
 
 import android.os.Bundle
-import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.isVisible
 import androidx.lifecycle.lifecycleScope
@@ -9,6 +8,7 @@ import com.example.r2recorder.data.R2Config
 import com.example.r2recorder.data.SettingsStore
 import com.example.r2recorder.databinding.ActivitySettingsBinding
 import com.example.r2recorder.r2.R2Client
+import com.example.r2recorder.util.Toasts
 import com.google.android.material.snackbar.Snackbar
 import com.google.android.material.textfield.TextInputLayout
 import kotlinx.coroutines.Dispatchers
@@ -40,7 +40,7 @@ class SettingsActivity : AppCompatActivity() {
             val form = readForm() ?: return@setOnClickListener
             try {
                 settingsStore.save(form)
-                Toast.makeText(this, R.string.config_saved, Toast.LENGTH_SHORT).show()
+                Toasts.show(this, getString(R.string.config_saved))
                 finish()
             } catch (e: Exception) {
                 showMessage(getString(R.string.unknown_error) + ": " + (e.message ?: ""))
@@ -122,7 +122,11 @@ class SettingsActivity : AppCompatActivity() {
             }
             setBusy(false)
             if (error == null) {
-                Snackbar.make(binding.root, R.string.settings_test_ok, Snackbar.LENGTH_LONG).show()
+                Snackbar.make(
+                    binding.root,
+                    Toasts.withTotalCount(this@SettingsActivity, getString(R.string.settings_test_ok)),
+                    Snackbar.LENGTH_LONG
+                ).show()
             } else {
                 showMessage(getString(R.string.settings_test_failed, error))
             }
@@ -136,6 +140,10 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun showMessage(message: String) {
-        Snackbar.make(binding.root, message, Snackbar.LENGTH_LONG).show()
+        Snackbar.make(
+            binding.root,
+            Toasts.withTotalCount(this, message),
+            Snackbar.LENGTH_LONG
+        ).show()
     }
 }

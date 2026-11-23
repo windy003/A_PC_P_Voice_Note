@@ -14,9 +14,10 @@
     <string name="record_too_short">录音时间太短，已丢弃</string>
     <string name="record_saved">录音已保存</string>
     <string name="record_saved_uploading">录音已保存，正在上传…</string>
-    <string name="record_saved_local_only">录音已保存 · 未上传（未配置 R2）· 共 %1$d 条</string>
-    <string name="upload_result_success">上传成功 · 共 %1$d 条录音</string>
-    <string name="upload_result_failure">上传失败 · 共 %1$d 条录音</string>
+    <string name="record_saved_local_only">录音已保存 · 未上传（未配置 R2）</string>
+    <string name="upload_result_success">上传成功</string>
+    <string name="upload_result_failure">上传失败</string>
+    <string name="toast_total">%1$s · 共 %2$d 条</string>
     <string name="record_save_failed">录音保存失败</string>
     <string name="recording_channel_name">录音</string>
     <string name="recording_channel_description">录音进行中的通知</string>

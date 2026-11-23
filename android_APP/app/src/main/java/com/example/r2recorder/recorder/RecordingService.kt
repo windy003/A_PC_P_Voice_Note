@@ -14,7 +14,6 @@ import android.media.MediaRecorder
 import android.os.Build
 import android.os.IBinder
 import android.os.SystemClock
-import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
@@ -60,7 +59,7 @@ class RecordingService : Service() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) !=
             PackageManager.PERMISSION_GRANTED
         ) {
-            Toast.makeText(this, R.string.record_permission_denied, Toast.LENGTH_SHORT).show()
+            Toasts.show(this, getString(R.string.record_permission_denied))
             RecorderState.idle()
             stopSelf()
             return
@@ -70,11 +69,14 @@ class RecordingService : Service() {
         try {
             startForegroundInternal(startedAtWallClock)
         } catch (e: Exception) {
-            Toast.makeText(
+            Toasts.show(
                 this,
-                getString(R.string.record_start_failed, e.message ?: getString(R.string.unknown_error)),
-                Toast.LENGTH_LONG
-            ).show()
+                getString(
+                    R.string.record_start_failed,
+                    e.message ?: getString(R.string.unknown_error)
+                ),
+                long = true
+            )
             stopSelf()
             return
         }
@@ -98,11 +100,14 @@ class RecordingService : Service() {
             recording = false
             RecorderState.idle()
             stopForeground(STOP_FOREGROUND_REMOVE)
-            Toast.makeText(
+            Toasts.show(
                 this,
-                getString(R.string.record_start_failed, e.message ?: getString(R.string.unknown_error)),
-                Toast.LENGTH_LONG
-            ).show()
+                getString(
+                    R.string.record_start_failed,
+                    e.message ?: getString(R.string.unknown_error)
+                ),
+                long = true
+            )
             stopSelf()
         }
     }
@@ -145,22 +150,23 @@ class RecordingService : Service() {
             )
             val repository = RecordingRepository.get(this)
             repository.add(item)
-            val total = repository.snapshot().size
             if (SettingsStore(this).configOrNull() != null) {
                 UploadManager.enqueue(this, item.id, notifyUser = true)
                 Toasts.show(this, getString(R.string.record_saved_uploading))
             } else {
-                Toasts.show(this, getString(R.string.record_saved_local_only, total))
+                Toasts.show(this, getString(R.string.record_saved_local_only))
             }
         } else {
             val tooShort = startElapsed > 0 &&
                 SystemClock.elapsedRealtime() - startElapsed < 1000
             file?.delete()
-            Toast.makeText(
+            Toasts.show(
                 this,
-                if (tooShort) R.string.record_too_short else R.string.record_save_failed,
-                Toast.LENGTH_SHORT
-            ).show()
+                getString(
+                    if (tooShort) R.string.record_too_short
+                    else R.string.record_save_failed
+                )
+            )
         }
 
         RecorderState.idle()

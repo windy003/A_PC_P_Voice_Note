@@ -117,12 +117,14 @@ class UploadWorker(
 
     private fun notifyResult(success: Boolean) {
         if (!inputData.getBoolean(KEY_NOTIFY_USER, false)) return
-        val count = RecordingRepository.get(applicationContext).snapshot().size
-        val message = applicationContext.getString(
-            if (success) R.string.upload_result_success else R.string.upload_result_failure,
-            count
+        Toasts.show(
+            applicationContext,
+            applicationContext.getString(
+                if (success) R.string.upload_result_success
+                else R.string.upload_result_failure
+            ),
+            long = true
         )
-        Toasts.show(applicationContext, message, long = true)
     }
 
     companion object {

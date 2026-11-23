@@ -14,7 +14,6 @@ import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
 import android.provider.Settings
-import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -35,6 +34,7 @@ import com.example.r2recorder.sync.SyncManager
 import com.example.r2recorder.ui.RecordingAdapter
 import com.example.r2recorder.upload.UploadManager
 import com.example.r2recorder.util.Formats
+import com.example.r2recorder.util.Toasts
 import com.google.android.material.snackbar.Snackbar
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -55,6 +55,7 @@ class MainActivity : AppCompatActivity(), RecordingAdapter.Callbacks {
     private var playingId: String? = null
     private var tickerJob: Job? = null
     private var syncJob: Job? = null
+    private var syncSuccessNotified = false
     private var startingRecording = false
 
     private val permissionLauncher = registerForActivityResult(
@@ -128,6 +129,8 @@ class MainActivity : AppCompatActivity(), RecordingAdapter.Callbacks {
         tickerJob?.cancel()
         tickerJob = null
         releasePlayer()
+        // 离开前台后重置，下次从后台回到应用时重新同步并提示一次。
+        syncSuccessNotified = false
         super.onStop()
     }
 
@@ -317,7 +320,7 @@ class MainActivity : AppCompatActivity(), RecordingAdapter.Callbacks {
             it.copy(status = com.example.r2recorder.data.UploadStatus.LOCAL, error = null)
         }
         UploadManager.retry(this, recording.id)
-        Toast.makeText(this, R.string.retry_queued, Toast.LENGTH_SHORT).show()
+        Toasts.show(this, getString(R.string.retry_queued))
     }
 
     override fun onDelete(recording: Recording) {
@@ -356,7 +359,7 @@ class MainActivity : AppCompatActivity(), RecordingAdapter.Callbacks {
                 if (isFinishing || isDestroyed) return@launch
                 Snackbar.make(
                     binding.root,
-                    text,
+                    Toasts.withTotalCount(this@MainActivity, text),
                     if (isError) Snackbar.LENGTH_LONG else Snackbar.LENGTH_SHORT
                 ).show()
             }
@@ -374,12 +377,17 @@ class MainActivity : AppCompatActivity(), RecordingAdapter.Callbacks {
                 SyncManager.sync(this@MainActivity)
             }
             if (isFinishing || isDestroyed) return@launch
-            // onResume 可能被多次调用（例如权限弹窗、从设置页返回、重新打开应用），
-            // 每次都会重新同步；但成功提示只在本进程的第一次成功同步后显示一次。
+            if (!lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return@launch
+            // 同一次前台停留期间 onResume 可能被多次触发（例如权限弹窗），
+            // 成功提示只显示一次；每次从后台回到应用后重新计数。
             if (!result.connected || syncSuccessNotified) return@launch
             syncSuccessNotified = true
             val (text, _) = SyncManager.formatResult(result)
-            Snackbar.make(binding.root, text, Snackbar.LENGTH_SHORT).show()
+            Snackbar.make(
+                binding.root,
+                Toasts.withTotalCount(this@MainActivity, text),
+                Snackbar.LENGTH_SHORT
+            ).show()
         }
     }
 
@@ -392,7 +400,7 @@ class MainActivity : AppCompatActivity(), RecordingAdapter.Callbacks {
         if (count == 0) {
             showMessage(R.string.retry_all_empty)
         } else {
-            Toast.makeText(this, R.string.retry_all_queued, Toast.LENGTH_SHORT).show()
+            Toasts.show(this, getString(R.string.retry_all_queued))
         }
     }
 
@@ -410,19 +418,22 @@ class MainActivity : AppCompatActivity(), RecordingAdapter.Callbacks {
     }
 
     private fun showMessage(messageRes: Int, actionRes: Int? = null, action: (() -> Unit)? = null) {
-        val bar = Snackbar.make(binding.root, messageRes, Snackbar.LENGTH_LONG)
+        showMessage(getString(messageRes), actionRes, action)
+    }
+
+    private fun showMessage(
+        message: String,
+        actionRes: Int? = null,
+        action: (() -> Unit)? = null
+    ) {
+        val bar = Snackbar.make(
+            binding.root,
+            Toasts.withTotalCount(this, message),
+            Snackbar.LENGTH_LONG
+        )
         if (actionRes != null && action != null) {
             bar.setAction(actionRes) { action() }
         }
         bar.show()
-    }
-
-    private fun showMessage(message: String) {
-        Snackbar.make(binding.root, message, Snackbar.LENGTH_LONG).show()
-    }
-
-    companion object {
-        // 进程级标记：保证自动下行同步的成功提示在一次应用运行中只出现一次。
-        private var syncSuccessNotified = false
     }
 }

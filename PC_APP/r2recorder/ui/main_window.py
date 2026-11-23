@@ -1015,6 +1015,7 @@ class MainWindow(tk.Tk):
         duration_ms: int = 3000,
     ) -> None:
         """屏幕级全局提示：主窗口隐藏、其他程序在前台时也会显示。"""
+        text = self._with_total_count(text)
         try:
             self.global_toast.show(
                 text, error=error, duration_ms=duration_ms
@@ -1029,6 +1030,15 @@ class MainWindow(tk.Tk):
                 self.toast.show(text, error=error, duration_ms=duration_ms)
             except tk.TclError:
                 pass
+
+    def _with_total_count(self, text: str) -> str:
+        """在所有提示末尾附带当前录音总数。"""
+        try:
+            total = len(self.repository.snapshot())
+        except Exception:
+            logger.debug("读取录音总数失败", exc_info=True)
+            return text
+        return f"{text} · 共 {total} 条"
 
     def _show_from_tray(self, *, trigger_sync: bool = True) -> None:
         if self._closed:

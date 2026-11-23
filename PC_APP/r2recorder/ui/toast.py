@@ -14,6 +14,15 @@ from .widgets import draw_round_rect, parent_bg
 logger = logging.getLogger(__name__)
 
 TRANSPARENT_COLOR = "#010203"
+TOTAL_COUNT_PREFIX = " · 共 "
+
+
+def _split_total_suffix(text: str) -> tuple[str, str]:
+    """拆分“正文 · 共 N 条”，超长时只截断正文，保留总数。"""
+    index = text.rfind(TOTAL_COUNT_PREFIX)
+    if index != -1 and text.endswith("条"):
+        return text[:index], text[index:]
+    return text, ""
 
 
 class Toast(tk.Canvas):
@@ -119,7 +128,7 @@ class GlobalToast:
 
     HEIGHT = 48
     PADDING = 22
-    MAX_WIDTH = 640
+    MAX_WIDTH = 760
 
     def __init__(self, root: tk.Misc, theme: Theme):
         self._root = root
@@ -140,13 +149,17 @@ class GlobalToast:
         self.hide()
         theme = self._theme
 
-        if self._font.measure(text) > self.MAX_WIDTH - self.PADDING * 2:
-            while text and (
-                self._font.measure(text + "…")
-                > self.MAX_WIDTH - self.PADDING * 2
+        max_text_width = self.MAX_WIDTH - self.PADDING * 2
+        body, total_suffix = _split_total_suffix(text)
+        if self._font.measure(body + total_suffix) > max_text_width:
+            while body and (
+                self._font.measure(body + "…" + total_suffix)
+                > max_text_width
             ):
-                text = text[:-1]
-            text += "…"
+                body = body[:-1]
+            text = body + "…" + total_suffix
+        else:
+            text = body + total_suffix
 
         width = max(
             200,
