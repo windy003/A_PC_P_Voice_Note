@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from dataclasses import dataclass
 
@@ -72,38 +71,6 @@ LIGHT = Theme(
     scroll_thumb="#B7C2CB",
 )
 
-DARK = Theme(
-    name="dark",
-    surface="#0F1417",
-    card="#171D21",
-    field="#12181B",
-    on_surface="#E2E4E6",
-    on_surface_variant="#A9B4BB",
-    outline="#333D43",
-    primary="#8DCDF4",
-    primary_hover="#B3DEF9",
-    on_primary="#00344E",
-    primary_container="#004C71",
-    on_primary_container="#C9E6FF",
-    secondary_container="#24323C",
-    on_secondary_container="#D2E5F5",
-    error="#FFB4AB",
-    error_container="#93000A",
-    on_error_container="#FFDAD6",
-    record_red="#D94848",
-    record_red_hover="#B93A3A",
-    on_record="#FFFFFF",
-    success="#81C784",
-    status_local="#90A4AE",
-    status_uploading="#64B5F6",
-    status_uploaded="#81C784",
-    status_failed="#EF9A9A",
-    chip_text="#0B1D29",
-    disabled="#4A555C",
-    disabled_text="#D0D6DA",
-    scroll_thumb="#3D484F",
-)
-
 
 if sys.platform == "win32":
     UI_FONT = "Microsoft YaHei UI"
@@ -114,26 +81,3 @@ elif sys.platform == "darwin":
 else:
     UI_FONT = "Noto Sans CJK SC"
     MONO_FONT = "DejaVu Sans Mono"
-
-
-def system_prefers_dark() -> bool:
-    override = os.environ.get("R2_RECORDER_THEME", "").strip().lower()
-    if override == "dark":
-        return True
-    if override == "light":
-        return False
-    if sys.platform == "win32":
-        try:
-            import winreg
-
-            path = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path) as key:
-                value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
-            return int(value) == 0
-        except Exception:
-            pass
-    return False
-
-
-def get_theme() -> Theme:
-    return DARK if system_prefers_dark() else LIGHT

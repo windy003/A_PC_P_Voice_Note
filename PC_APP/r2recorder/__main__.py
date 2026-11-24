@@ -9,7 +9,7 @@ import sys
 from . import __version__
 from .paths import APP_DIR, LOG_PATH, ensure_dirs
 from .ui.main_window import MainWindow
-from .ui.theme import get_theme
+from .ui.theme import LIGHT
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ def main() -> int:
     _setup_logging()
     logger.info("启动 R2 录音机 %s", __version__)
     try:
-        window = MainWindow(get_theme())
+        window = MainWindow(LIGHT)
         window.mainloop()
     except Exception:
         logger.exception("程序异常退出")
