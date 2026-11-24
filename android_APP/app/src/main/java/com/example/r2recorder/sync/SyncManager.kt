@@ -2,6 +2,7 @@ package com.example.r2recorder.sync
 
 import android.content.Context
 import android.media.MediaMetadataRetriever
+import android.util.Log
 import com.example.r2recorder.data.R2Config
 import com.example.r2recorder.data.Recording
 import com.example.r2recorder.data.RecordingRepository
@@ -28,6 +29,7 @@ data class SyncResult(
  * 云端有、本地没有 -> 下载；本地已上传、云端没有 -> 删除本地。
  */
 object SyncManager {
+    private const val TAG = "SyncManager"
     private val AUDIO_SUFFIXES = setOf("m4a", "mp4", "aac", "wav", "mp3", "flac", "ogg")
     private val CREATED_AT_REGEX = Regex("rec-(\\d{8})-(\\d{6})")
     private val INVALID_NAME_REGEX = Regex("[\\\\/:*?\"<>|\\x00-\\x1f]")
@@ -37,13 +39,14 @@ object SyncManager {
         val config = SettingsStore(context).configOrNull()
             ?: return SyncResult(configured = false, connected = false)
 
-        var pendingFailed = 0
+        val failedPending = mutableSetOf<String>()
         for (key in PendingDeletes.snapshot(context)) {
             try {
                 R2Client.deleteObject(config, key)
                 PendingDeletes.remove(context, key)
-            } catch (_: Exception) {
-                pendingFailed++
+            } catch (e: Exception) {
+                failedPending.add(key)
+                Log.w(TAG, "云端删除失败：$key", e)
             }
         }
 
@@ -65,9 +68,20 @@ object SyncManager {
                 configured = true,
                 connected = false,
                 error = e.message ?: "网络错误",
-                pendingFailed = pendingFailed
+                pendingFailed = failedPending.size
             )
         }
+
+        // 云端已经不存在的待删除对象说明删除目标已达成，直接清理，避免永久重试。
+        val remoteKeys = objects.mapTo(mutableSetOf()) { it.key }
+        for (key in failedPending.toList()) {
+            if (key.startsWith(config.normalizedPrefix) && key !in remoteKeys) {
+                PendingDeletes.remove(context, key)
+                failedPending.remove(key)
+                Log.i(TAG, "待删除对象已不在云端，清理记录：$key")
+            }
+        }
+        val pendingFailed = failedPending.size
         val remote = objects
             .filter { suffixOf(it.key) in AUDIO_SUFFIXES }
             .associateBy { it.key }
@@ -143,7 +157,16 @@ object SyncManager {
             R2Client.deleteObject(config, objectKey)
             PendingDeletes.remove(context, objectKey)
             "已删除本地和云端" to false
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.w(TAG, "立即删除云端对象失败：$objectKey", e)
+            // 对象本来就不存在时 R2 可能返回非 404 的错误；确认一次，避免留下无效待删除记录。
+            val stillExists = runCatching {
+                R2Client.objectExists(config, objectKey)
+            }.getOrNull()
+            if (stillExists == false) {
+                PendingDeletes.remove(context, objectKey)
+                return "已删除本地和云端" to false
+            }
             PendingDeletes.add(context, objectKey)
             "已删除本地；云端删除失败，将在下次同步重试" to true
         }

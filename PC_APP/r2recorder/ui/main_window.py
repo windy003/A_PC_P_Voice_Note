@@ -73,6 +73,8 @@ class MainWindow(tk.Tk):
 
         self._ui_queue: queue.Queue[Callable[[], None]] = queue.Queue()
         self._drain_id: str | None = None
+        self._state_watch_id: str | None = None
+        self._last_window_state = ""
         self._ticker_id: str | None = None
         self._playing_id: str | None = None
         self._settings_dialog: SettingsDialog | None = None
@@ -131,6 +133,8 @@ class MainWindow(tk.Tk):
             logger.info("恢复了 %d 个中断的上传任务", recovered)
 
         self._drain_id = self.after(100, self._drain_ui_queue)
+        self._last_window_state = self.state()
+        self._state_watch_id = self.after(400, self._watch_window_state)
         self.after(300, self._auto_enqueue)
         self.after(1300, self._request_cloud_sync)
         show_text = (
@@ -478,13 +482,19 @@ class MainWindow(tk.Tk):
     def _on_settings_closed(self) -> None:
         self._settings_dialog = None
 
-    def _on_sync_message(self, text: str, error: bool) -> None:
+    def _on_sync_message(
+        self,
+        text: str,
+        error: bool,
+        include_total: bool = True,
+    ) -> None:
         if self._closed:
             return
         self._notify(
             text,
             error=error,
             duration_ms=5000 if error else 4000,
+            include_total=include_total,
         )
 
     def _request_cloud_sync(self) -> None:
@@ -501,6 +511,20 @@ class MainWindow(tk.Tk):
         if event.widget is not self or self._closed:
             return
         self._request_cloud_sync()
+
+    def _watch_window_state(self) -> None:
+        """轮询窗口状态：从任务栏最小化恢复时 Windows 不一定触发 <Map>。"""
+        self._state_watch_id = None
+        if self._closed:
+            return
+        try:
+            state = self.state()
+        except tk.TclError:
+            return
+        previous, self._last_window_state = self._last_window_state, state
+        if previous == "iconic" and state in ("normal", "zoomed"):
+            self._request_cloud_sync()
+        self._state_watch_id = self.after(400, self._watch_window_state)
 
     # ------------------------------------------------------------------ 快捷键
     def _load_show_hotkey_spec(self) -> HotkeySpec | None:
@@ -1012,6 +1036,7 @@ class MainWindow(tk.Tk):
                 "删除录音文件失败：%s", recording.local_path, exc_info=True
             )
         self.repository.delete(recording.id)
+        logger.info("删除录音：%s", recording.file_name)
 
         was_remote = bool(recording.object_key) or recording.status in (
             UploadStatus.UPLOADING,
@@ -1021,12 +1046,19 @@ class MainWindow(tk.Tk):
             key = recording.object_key or read_config().object_key_for(
                 recording.file_name
             )
-            self.sync_manager.delete_remote(
-                key,
-                formats.display_name(recording.created_at),
+            label = formats.display_name(recording.created_at)
+            local_count = len(self.repository.snapshot())
+            self._notify(
+                f"本地删除成功，正在删除云端 · 本地 {local_count} 条",
+                include_total=False,
             )
+            self.sync_manager.delete_remote(key, label)
         else:
-            self._notify("已删除本地录音（未上传过）")
+            local_count = len(self.repository.snapshot())
+            self._notify(
+                f"本地删除成功（未上传过） · 本地 {local_count} 条",
+                include_total=False,
+            )
 
     # ------------------------------------------------------------------ 托盘 / 退出
     def _is_visible(self) -> bool:
@@ -1043,9 +1075,11 @@ class MainWindow(tk.Tk):
         *,
         error: bool = False,
         duration_ms: int = 3000,
+        include_total: bool = True,
     ) -> None:
         """屏幕级全局提示：主窗口隐藏、其他程序在前台时也会显示。"""
-        text = self._with_total_count(text)
+        if include_total:
+            text = self._with_total_count(text)
         try:
             self.global_toast.show(
                 text, error=error, duration_ms=duration_ms
@@ -1162,6 +1196,12 @@ class MainWindow(tk.Tk):
             except tk.TclError:
                 pass
             self._drain_id = None
+        if self._state_watch_id is not None:
+            try:
+                self.after_cancel(self._state_watch_id)
+            except tk.TclError:
+                pass
+            self._state_watch_id = None
         self.player.stop()
         self.uploader.stop()
         self.sync_manager.shutdown()

@@ -137,7 +137,7 @@ class SyncManager:
         repository: RecordingRepository,
         config_provider: Callable[[], R2Config | None],
         post: Callable[[Callable[[], None]], None],
-        on_message: Callable[[str, bool], None] | None = None,
+        on_message: Callable[[str, bool, bool], None] | None = None,
     ):
         self._repository = repository
         self._config_provider = config_provider
@@ -168,15 +168,13 @@ class SyncManager:
         self,
         object_key: str,
         label: str,
-        *,
-        notify: bool = True,
     ) -> None:
         if self._closed:
             return
         self._pending.add(object_key)
         threading.Thread(
             target=self._delete_worker,
-            args=(object_key, label, notify),
+            args=(object_key, label),
             name="r2-delete",
             daemon=True,
         ).start()
@@ -211,35 +209,62 @@ class SyncManager:
         self,
         object_key: str,
         label: str,
-        notify: bool,
     ) -> None:
         config = self._config_provider()
         if config is None:
-            if notify:
-                self._post_message(
-                    f"已删除本地；未配置 R2，云端副本暂未删除：{label}",
-                    True,
-                )
+            self._post_message(
+                self._delete_result_text("未执行（未配置 R2）", None),
+                True,
+                include_total=False,
+            )
             return
         with self._network_lock:
             try:
                 r2.delete_object(config, object_key)
-            except Exception as exc:
+                deleted = True
+            except Exception:
                 logger.warning("云端删除失败：%s", object_key, exc_info=True)
-                if notify:
-                    self._post_message(
-                        f"已删除本地；云端删除失败，将在下次同步重试：{label}",
-                        True,
-                    )
-                return
-        self._pending.remove(object_key)
-        if notify:
-            self._post_message(f"已删除本地和云端：{label}", False)
+                deleted = False
+            cloud_count = self._count_remote_audio(config)
+        if deleted:
+            self._pending.remove(object_key)
+            logger.info("云端删除成功：%s", label)
+            self._post_message(
+                self._delete_result_text("成功", cloud_count),
+                False,
+                include_total=False,
+            )
+        else:
+            self._post_message(
+                self._delete_result_text("失败，将在下次同步重试", cloud_count),
+                True,
+                include_total=False,
+            )
 
-    def _post_message(self, text: str, error: bool) -> None:
+    def _count_remote_audio(self, config: R2Config) -> int | None:
+        try:
+            objects = r2.list_objects(config, config.normalized_prefix)
+        except Exception:
+            logger.debug("统计云端录音数量失败", exc_info=True)
+            return None
+        return sum(1 for obj in objects if _is_audio_key(obj.key))
+
+    def _delete_result_text(self, result: str, cloud_count: int | None) -> str:
+        local_count = len(self._repository.snapshot())
+        if cloud_count is None:
+            return f"云端删除{result} · 本地 {local_count} 条，云端数量未知"
+        return f"云端删除{result} · 本地 {local_count} 条，云端 {cloud_count} 条"
+
+    def _post_message(
+        self,
+        text: str,
+        error: bool,
+        *,
+        include_total: bool = True,
+    ) -> None:
         if self._on_message is None:
             return
-        self._post(lambda: self._on_message(text, error))
+        self._post(lambda: self._on_message(text, error, include_total))
 
     # ------------------------------------------------------------------ 同步
     def _sync(self) -> SyncResult:

@@ -244,6 +244,12 @@ object R2Client {
             .header("x-amz-date", amzDate)
             .header("x-amz-content-sha256", payloadHash)
             .header("Authorization", authorization)
+        // 请求方法必须与签名里的 method 一致；PUT/其他带 body 的方法由 configure 设置。
+        when (method) {
+            "GET" -> requestBuilder.get()
+            "HEAD" -> requestBuilder.head()
+            "DELETE" -> requestBuilder.delete()
+        }
         if (contentType != null) requestBuilder.header("Content-Type", contentType)
         configure(requestBuilder)
         return requestBuilder.build()
