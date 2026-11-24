@@ -209,15 +209,29 @@ class MainActivity : AppCompatActivity(), RecordingAdapter.Callbacks {
         }
     }
 
-    private fun renderItems(items: List<Recording>) {
+    private fun renderItems(items: List<Recording>, scrollToTop: Boolean = false) {
         val ordered = sortRecordings(items)
-        adapter.submitList(ordered)
         binding.tvCount.isVisible = ordered.isNotEmpty()
         binding.tvCount.text = getString(R.string.recording_count, ordered.size)
         binding.tvEmpty.isVisible = ordered.isEmpty()
         binding.btnSort.setText(
             if (sortDescending) R.string.sort_descending else R.string.sort_ascending
         )
+        adapter.submitList(ordered) {
+            // 切换排序后等 Diff 应用完成再置顶，避免列表随后又被拉回原来的位置。
+            if (scrollToTop) {
+                scrollListToTop()
+            }
+        }
+    }
+
+    private fun scrollListToTop() {
+        val layoutManager = binding.recycler.layoutManager as? LinearLayoutManager
+        if (layoutManager != null) {
+            layoutManager.scrollToPositionWithOffset(0, 0)
+        } else {
+            binding.recycler.scrollToPosition(0)
+        }
     }
 
     private fun sortRecordings(items: List<Recording>): List<Recording> {
@@ -231,8 +245,9 @@ class MainActivity : AppCompatActivity(), RecordingAdapter.Callbacks {
 
     private fun toggleSort() {
         sortDescending = !sortDescending
-        renderItems(repository.snapshot())
-        binding.recycler.scrollToPosition(0)
+        renderItems(repository.snapshot(), scrollToTop = true)
+        // 立即置顶一次，等列表提交后再置顶一次，确保每次都回到顶部。
+        scrollListToTop()
     }
 
     private fun renderRecordingState(state: RecorderState.State) {
