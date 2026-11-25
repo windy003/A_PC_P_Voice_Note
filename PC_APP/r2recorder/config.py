@@ -45,6 +45,16 @@ OSS_ACCESS_KEY_SECRET=
 OSS_PUBLIC_BASE_URL=
 # 可选：对象前缀，默认 recordings/
 OSS_KEY_PREFIX=recordings/
+
+# ---- 语音识别（STT）----
+# OpenAI 兼容接口，默认使用 Groq Whisper；留空 STT_API_KEY 则禁用。
+STT_BASE_URL=https://api.groq.com/openai/v1
+STT_API_KEY=
+STT_MODEL=whisper-large-v3-turbo
+# 中文填 zh；留空自动检测
+STT_LANGUAGE=zh
+# 保存录音后自动识别：true / false
+STT_AUTO=false
 """
 
 
@@ -139,6 +149,8 @@ def _encode_env_value(value: str) -> str:
 def update_env_file(
     path: str | os.PathLike[str],
     updates: dict[str, str],
+    *,
+    section_title: str = "阿里云 OSS 配置",
 ) -> None:
     """原地更新 .env 中的键，保留注释与其它行。"""
     target = Path(path)
@@ -166,7 +178,7 @@ def update_env_file(
     if missing:
         if output and output[-1].strip():
             output.append("")
-        output.append("# ---- 阿里云 OSS 配置 ----")
+        output.append(f"# ---- {section_title} ----")
         for key in missing:
             output.append(f"{key}={_encode_env_value(updates[key])}")
 

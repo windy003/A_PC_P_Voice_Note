@@ -15,7 +15,10 @@
 - 配置阿里云 OSS 后自动上传；失败自动重试（最多 3 次）
 - 列表显示每条录音的上传状态（待上传 / 上传中 / 已上传 / 上传失败）
 - 支持「重试」「重试全部」
-- 录音列表支持键盘操作：按 **Tab** 聚焦列表，**↑ / ↓** 选择条目，**空格** 播放 / 停止，**Delete** 删除选中条目
+- **每条录音可一键「识别文字」**：调用 OpenAI 兼容的语音识别接口（默认 Groq Whisper），
+  结果保存在本机，支持复制和重新识别；也可以在设置里开启保存后自动识别
+- 录音列表支持键盘操作：按 **Tab** 聚焦列表，**↑ / ↓** 选择条目，**空格** 识别文字，
+  **Shift+空格** 播放 / 停止，**Delete** 删除选中条目
 - 播放时在正在播放的录音条目底部显示进度条
 - 配置保存在项目文件夹的 `.env` 中，界面内即可编辑
 
@@ -88,6 +91,50 @@ OSS_KEY_PREFIX=recordings/
 > 跨设备同步提示：Android 端也已改用阿里云 OSS。在手机应用的「OSS 设置」中手动填写
 > Endpoint、Region、Bucket、AccessKey（与 PC 端 `.env` 保持一致），即可共用同一份云端录音。
 
+## 语音识别（STT）
+
+每条录音右侧都有「识别文字」按钮，点击后会把录音上传到 OpenAI 兼容的语音识别接口，
+识别结果显示在卡片里，并提供「复制文字」和「重新识别」。也可以开启保存录音后自动识别。
+
+识别文字只保存在本机 `data/recordings.json` 的 `transcript` 字段中，**不会**随 OSS 同步到其它设备；
+语音文件会上传到所配置的第三方接口，请注意隐私。
+
+### 使用 Groq Whisper（默认）
+
+1. 在 [Groq Console](https://console.groq.com/keys) 创建 API Key。
+2. 在应用「设置 → 语音识别」中填写，或直接编辑 `.env`：
+
+   ```dotenv
+   STT_BASE_URL=https://api.groq.com/openai/v1
+   STT_API_KEY=gsk_你的key
+   STT_MODEL=whisper-large-v3-turbo
+   # 中文填 zh；留空由接口自动检测
+   STT_LANGUAGE=zh
+   # 保存录音后自动识别（会产生接口费用）
+   STT_AUTO=false
+   ```
+
+3. 保存后点击录音条目上的「识别文字」。
+
+说明：
+
+- 单个文件限制 25MB。超过时会尝试用本机 ffmpeg 压缩成 16kHz 单声道 mp3 再上传；
+  没有 ffmpeg 时会给出提示。
+- Groq 在大陆可能无法直连；如果网络不通，可以换成下文的硅基流动接口。
+- `STT_API_KEY` 留空表示禁用该功能。
+
+### 切换到其它 OpenAI 兼容服务
+
+任何接受 `POST {BaseURL}/audio/transcriptions` 的服务都可以直接换配置，不需要改代码。
+例如[硅基流动](https://siliconflow.cn)：
+
+```dotenv
+STT_BASE_URL=https://api.siliconflow.cn/v1
+STT_API_KEY=sk-你的key
+STT_MODEL=FunAudioLLM/SenseVoiceSmall
+STT_LANGUAGE=zh
+```
+
 ## 关闭与退出
 
 - 启动应用后不会弹出主窗口，程序直接待在系统托盘；需要界面时双击托盘图标（或右键「显示主窗口」）。
@@ -105,7 +152,7 @@ OSS_KEY_PREFIX=recordings/
 | 内容 | 路径 |
 | --- | --- |
 | 录音文件 | `data/recordings/` |
-| 录音元数据 | `data/recordings.json` |
+| 录音元数据（含识别文字） | `data/recordings.json` |
 | 播放缓存 | `data/cache/` |
 | 日志 | `data/app.log` |
 | 配置 | `.env` |
@@ -131,6 +178,7 @@ PC_APP/
     ├── model.py            # 录音记录与 JSON 仓库
     ├── paths.py            # 目录与文件路径
     ├── oss.py              # 阿里云 OSS 最小 REST 客户端（Signature V4）
+    ├── stt.py              # 语音识别客户端与后台队列（OpenAI 兼容）
     ├── upload.py           # 后台上传队列
     ├── util.py
     └── ui/

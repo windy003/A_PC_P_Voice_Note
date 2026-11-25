@@ -21,7 +21,12 @@ from ..hotkey import (
     HotkeySpec,
     parse_hotkey,
 )
-from ..model import Recording, RecordingRepository, UploadStatus
+from ..model import (
+    Recording,
+    RecordingRepository,
+    TranscriptStatus,
+    UploadStatus,
+)
 from ..paths import CACHE_DIR, DATA_DIR, RECORDINGS_DIR, ensure_dirs
 from ..prefs import (
     DEFAULT_SHOW_HOTKEY,
@@ -29,6 +34,7 @@ from ..prefs import (
     load_preferences,
     save_preferences,
 )
+from ..stt import STTManager, read_stt_config
 from ..sync import SyncManager
 from ..upload import UploadManager
 from ..util import open_path
@@ -73,6 +79,15 @@ class MainWindow(tk.Tk):
         )
 
         self._ui_queue: queue.Queue[Callable[[], None]] = queue.Queue()
+        self.stt = STTManager(
+            self.repository,
+            self._stt_config_provider,
+            self.post,
+            self._on_stt_message,
+        )
+        recovered_stt = self.stt.recover_interrupted()
+        if recovered_stt:
+            logger.info("恢复了 %d 条中断的语音识别任务", recovered_stt)
         self._drain_id: str | None = None
         self._state_watch_id: str | None = None
         self._last_window_state = ""
@@ -80,6 +95,9 @@ class MainWindow(tk.Tk):
         self._playing_id: str | None = None
         self._play_links: dict[str, LinkButton] = {}
         self._progress_by_id: dict[str, PlaybackProgress] = {}
+        self._stt_boxes: dict[str, tk.Frame] = {}
+        self._stt_links: dict[str, LinkButton] = {}
+        self._copy_links: dict[str, LinkButton] = {}
         self._play_started_at: float | None = None
         self._play_duration_ms = 0
         self._play_progress_job: str | None = None
@@ -443,6 +461,21 @@ class MainWindow(tk.Tk):
         config = read_config()
         return config if config.is_complete else None
 
+    def _stt_config_provider(self):
+        config = read_stt_config()
+        return config if config.is_complete else None
+
+    def _require_stt_config(self) -> bool:
+        if read_stt_config().is_complete:
+            return True
+        if messagebox.askyesno(
+            "语音识别设置",
+            "请先在设置中填写语音识别的 API Key。现在去设置吗？",
+            parent=self,
+        ):
+            self._open_settings()
+        return False
+
     def _apply_config_state(self) -> None:
         if read_config().is_complete:
             self.banner.pack_forget()
@@ -506,6 +539,30 @@ class MainWindow(tk.Tk):
             duration_ms=5000 if error else 4000,
             include_total=include_total,
         )
+
+    def _on_stt_message(
+        self,
+        text: str,
+        error: bool,
+        recording_id: str | None = None,
+    ) -> None:
+        if self._closed:
+            return
+        self._notify(
+            text,
+            error=error,
+            duration_ms=5000 if error else 4000,
+        )
+        if not error and recording_id:
+            self.after_idle(
+                lambda: self._scroll_recording_into_view(recording_id)
+            )
+
+    def _scroll_recording_into_view(self, recording_id: str) -> None:
+        for recording, card in self._list_cards:
+            if recording.id == recording_id:
+                self._scroll_card_into_view(card)
+                return
 
     def _request_cloud_sync(self) -> None:
         """打开应用、从托盘唤醒或窗口重新显示时触发一次同步（2 秒内去重）。"""
@@ -776,6 +833,9 @@ class MainWindow(tk.Tk):
             self._notify("录音已保存，正在上传…")
         else:
             self._notify("录音已保存（待上传）")
+        stt_config = read_stt_config()
+        if stt_config.auto and stt_config.is_complete:
+            self.stt.enqueue(recording.id)
 
     def _on_save_failed(self, exc: Exception) -> None:
         self._set_record_busy(False)
@@ -788,7 +848,85 @@ class MainWindow(tk.Tk):
 
     # ------------------------------------------------------------------ 列表
     def _on_repository_changed(self, _items) -> None:
-        self.post(lambda: self._refresh_records(self.repository.snapshot()))
+        self.post(self._apply_repository_update)
+
+    def _apply_repository_update(self) -> None:
+        if self._closed:
+            return
+        items = self.repository.snapshot()
+        if self._apply_transcript_update(items):
+            return
+        self._refresh_records(items)
+
+    def _apply_transcript_update(self, items: list[Recording]) -> bool:
+        """只有识别字段变化时就地刷新卡片，避免整个列表重建闪烁。"""
+        if not items and not self._list_cards:
+            return True
+        ordered = self._sort_recordings(items)
+        if [item.id for item in ordered] != [
+            recording.id for recording, _card in self._list_cards
+        ]:
+            return False
+
+        current = {
+            recording.id: recording for recording, _card in self._list_cards
+        }
+        transcript_fields = (
+            "transcript",
+            "transcript_status",
+            "transcript_error",
+            "transcript_model",
+            "transcript_updated_at",
+        )
+        changed: list[Recording] = []
+        for item in ordered:
+            previous = current[item.id]
+            if _without_transcript(previous) != _without_transcript(item):
+                return False
+            if any(
+                getattr(previous, field) != getattr(item, field)
+                for field in transcript_fields
+            ):
+                changed.append(item)
+
+        self._list_cards = [
+            (item, card)
+            for item, (_previous, card) in zip(ordered, self._list_cards)
+        ]
+        for item in changed:
+            self._update_transcript_card(item)
+        return True
+
+    def _update_transcript_card(self, recording: Recording) -> None:
+        box = self._stt_boxes.get(recording.id)
+        if box is not None:
+            try:
+                if box.winfo_exists():
+                    self._render_stt_box(box, recording)
+            except tk.TclError:
+                pass
+        link = self._stt_links.get(recording.id)
+        if link is not None:
+            try:
+                link.set_text(self._stt_link_text(recording))
+                link.set_enabled(
+                    recording.transcript_status != TranscriptStatus.PENDING
+                    and recording.local_path.exists()
+                )
+            except tk.TclError:
+                pass
+        copy_link = self._copy_links.get(recording.id)
+        if copy_link is not None:
+            try:
+                copy_link.set_enabled(bool(recording.transcript))
+            except tk.TclError:
+                pass
+
+    @staticmethod
+    def _stt_link_text(recording: Recording) -> str:
+        if recording.transcript_status == TranscriptStatus.PENDING:
+            return "识别中…"
+        return "重新识别" if recording.transcript else "识别文字"
 
     def _refresh_records(self, items: list[Recording]) -> None:
         if self._closed:
@@ -802,6 +940,9 @@ class MainWindow(tk.Tk):
         self._list_cards = []
         self._play_links = {}
         self._progress_by_id = {}
+        self._stt_boxes = {}
+        self._stt_links = {}
+        self._copy_links = {}
 
         if not ordered:
             tk.Label(
@@ -833,7 +974,8 @@ class MainWindow(tk.Tk):
             pass
         canvas.bind("<Up>", self._on_list_up)
         canvas.bind("<Down>", self._on_list_down)
-        canvas.bind("<space>", self._on_list_toggle_play)
+        canvas.bind("<space>", self._on_list_recognize)
+        canvas.bind("<Shift-space>", self._on_list_toggle_play)
         canvas.bind("<Delete>", self._on_list_delete)
         canvas.bind("<KP_Delete>", self._on_list_delete)
         canvas.bind("<FocusIn>", self._on_list_focus)
@@ -860,11 +1002,16 @@ class MainWindow(tk.Tk):
             self._select_list_index(target)
         return "break"
 
+    def _on_list_recognize(self, _event=None) -> str:
+        recording = self._selected_recording()
+        if recording is not None:
+            self._recognize(recording)
+        return "break"
+
     def _on_list_toggle_play(self, _event=None) -> str:
         recording = self._selected_recording()
         if recording is not None:
             self._toggle_play(recording)
-            self.after_idle(self._focus_list)
         return "break"
 
     def _on_list_delete(self, _event=None) -> str:
@@ -1082,6 +1229,11 @@ class MainWindow(tk.Tk):
                 wraplength=640,
             ).pack(fill="x", pady=(3, 0))
 
+        stt_box = tk.Frame(body, bg=theme.card)
+        stt_box.pack(fill="x")
+        self._stt_boxes[recording.id] = stt_box
+        self._render_stt_box(stt_box, recording)
+
         actions = tk.Frame(body, bg=theme.card)
         actions.pack(fill="x", pady=(4, 0))
 
@@ -1124,12 +1276,81 @@ class MainWindow(tk.Tk):
         play_link.set_enabled(recording.local_path.exists())
         self._play_links[recording.id] = play_link
 
+        copy_link = LinkButton(
+            actions,
+            "复制文字",
+            lambda: self._copy_transcript_by_id(recording.id),
+            theme=theme,
+            font=(UI_FONT, 9),
+        )
+        copy_link.pack(side="right", padx=(0, 8))
+        copy_link.set_enabled(bool(recording.transcript))
+        self._copy_links[recording.id] = copy_link
+
+        stt_link = LinkButton(
+            actions,
+            self._stt_link_text(recording),
+            lambda: self._recognize_by_id(recording.id),
+            theme=theme,
+            font=(UI_FONT, 9),
+        )
+        stt_link.pack(side="right", padx=(0, 8))
+        stt_link.set_enabled(
+            recording.transcript_status != TranscriptStatus.PENDING
+            and recording.local_path.exists()
+        )
+        self._stt_links[recording.id] = stt_link
+
         progress = PlaybackProgress(card, theme)
         progress.place(x=0, rely=1.0, anchor="sw", relwidth=1.0)
         progress.place_forget()
         self._progress_by_id[recording.id] = progress
 
         self._list_cards.append((recording, card))
+
+    def _render_stt_box(self, box: tk.Misc, recording: Recording) -> None:
+        """只重建卡片内部的识别区域，不触碰整个列表。"""
+        for child in box.winfo_children():
+            child.destroy()
+        theme = self.theme
+        if recording.transcript:
+            transcript_box = tk.Frame(box, bg=theme.secondary_container)
+            transcript_box.pack(fill="x", pady=(6, 0))
+            tk.Label(
+                transcript_box,
+                text=recording.transcript,
+                font=(UI_FONT, 9),
+                fg=theme.on_secondary_container,
+                bg=theme.secondary_container,
+                anchor="w",
+                justify="left",
+                wraplength=620,
+                padx=12,
+                pady=8,
+            ).pack(fill="x")
+        elif recording.transcript_status == TranscriptStatus.PENDING:
+            tk.Label(
+                box,
+                text="正在识别语音…",
+                font=(UI_FONT, 8),
+                fg=theme.on_surface_variant,
+                bg=theme.card,
+                anchor="w",
+            ).pack(fill="x", pady=(3, 0))
+        if (
+            recording.transcript_status == TranscriptStatus.FAILED
+            and recording.transcript_error
+        ):
+            tk.Label(
+                box,
+                text="识别失败：" + recording.transcript_error,
+                font=(UI_FONT, 8),
+                fg=theme.error,
+                bg=theme.card,
+                anchor="w",
+                justify="left",
+                wraplength=640,
+            ).pack(fill="x", pady=(3, 0))
 
     # ------------------------------------------------------------------ 操作
     def _update_play_links(self) -> None:
@@ -1290,6 +1511,44 @@ class MainWindow(tk.Tk):
         except Exception as exc:
             logger.exception("打开链接失败")
             messagebox.showerror("打开失败", str(exc), parent=self)
+
+    def _recognize_by_id(self, recording_id: str) -> None:
+        recording = self.repository.get(recording_id)
+        if recording is not None:
+            self._recognize(recording)
+
+    def _copy_transcript_by_id(self, recording_id: str) -> None:
+        recording = self.repository.get(recording_id)
+        if recording is not None:
+            self._copy_transcript(recording)
+
+    def _recognize(self, recording: Recording) -> None:
+        if recording.transcript_status == TranscriptStatus.PENDING:
+            self._notify("正在识别中，请稍候…", include_total=False)
+            return
+        if not self._require_stt_config():
+            return
+        if not recording.local_path.exists():
+            self._notify("本地录音文件不存在，无法识别", error=True)
+            return
+        force = bool(recording.transcript)
+        if not self.stt.enqueue(recording.id, force=force):
+            self._notify("无法开始识别，请稍后再试", error=True)
+            return
+        self._notify("正在识别语音…", include_total=False)
+
+    def _copy_transcript(self, recording: Recording) -> None:
+        text = (recording.transcript or "").strip()
+        if not text:
+            return
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(text)
+            self.update_idletasks()
+        except tk.TclError:
+            self._notify("复制失败：无法访问剪贴板", error=True)
+            return
+        self._notify("文字已复制到剪贴板", include_total=False)
 
     def _retry(self, recording: Recording) -> None:
         if not self._require_config():
@@ -1503,6 +1762,7 @@ class MainWindow(tk.Tk):
         self._stop_play_progress()
         self.uploader.stop()
         self.sync_manager.shutdown()
+        self.stt.stop()
         self.hotkey.stop()
         if self.show_hotkey is not None:
             self.show_hotkey.stop()
@@ -1544,6 +1804,18 @@ def _write_recording(data, samplerate: int, duration_ms: int, created_at: int) -
         created_at=created_at,
         duration_ms=duration_ms,
         size_bytes=final_path.stat().st_size,
+    )
+
+
+def _without_transcript(recording: Recording) -> Recording:
+    """返回去掉识别字段的副本，用于判断是否只需局部刷新。"""
+    return replace(
+        recording,
+        transcript=None,
+        transcript_status=TranscriptStatus.NONE,
+        transcript_error=None,
+        transcript_model=None,
+        transcript_updated_at=0,
     )
 
 

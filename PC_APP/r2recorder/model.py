@@ -33,6 +33,23 @@ class UploadStatus(str, Enum):
         return cls.LOCAL
 
 
+class TranscriptStatus(str, Enum):
+    NONE = "none"
+    PENDING = "pending"
+    DONE = "done"
+    FAILED = "failed"
+
+    @classmethod
+    def parse(cls, value: object) -> "TranscriptStatus":
+        if isinstance(value, cls):
+            return value
+        text = str(value or "").strip().lower()
+        for item in cls:
+            if text == item.value or text == item.name.lower():
+                return item
+        return cls.NONE
+
+
 @dataclass(frozen=True)
 class Recording:
     id: str
@@ -47,6 +64,11 @@ class Recording:
     remote_bucket: str | None = None
     remote_prefix: str | None = None
     remote_endpoint: str | None = None
+    transcript: str | None = None
+    transcript_status: TranscriptStatus = TranscriptStatus.NONE
+    transcript_error: str | None = None
+    transcript_model: str | None = None
+    transcript_updated_at: int = 0  # 毫秒时间戳
 
     @property
     def local_path(self) -> Path:
@@ -55,6 +77,7 @@ class Recording:
     def to_dict(self) -> dict:
         data = asdict(self)
         data["status"] = self.status.value
+        data["transcript_status"] = self.transcript_status.value
         return data
 
     @classmethod
@@ -73,6 +96,15 @@ class Recording:
                 remote_bucket=_optional_str(data.get("remote_bucket")),
                 remote_prefix=_optional_str(data.get("remote_prefix")),
                 remote_endpoint=_optional_str(data.get("remote_endpoint")),
+                transcript=_optional_str(data.get("transcript")),
+                transcript_status=TranscriptStatus.parse(
+                    data.get("transcript_status")
+                ),
+                transcript_error=_optional_str(data.get("transcript_error")),
+                transcript_model=_optional_str(data.get("transcript_model")),
+                transcript_updated_at=int(
+                    data.get("transcript_updated_at", 0) or 0
+                ),
             )
         except (KeyError, TypeError, ValueError):
             return None

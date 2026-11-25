@@ -22,6 +22,14 @@ from ..prefs import (
     load_preferences,
     save_preferences,
 )
+from ..stt import (
+    DEFAULT_BASE_URL,
+    DEFAULT_LANGUAGE,
+    DEFAULT_MODEL,
+    STTConfig,
+    read_stt_config,
+    save_stt_config,
+)
 from ..util import open_path
 from .theme import Theme, UI_FONT
 from .widgets import HotkeyInput, LinkButton, PillButton, ScrollFrame
@@ -55,7 +63,9 @@ class SettingsDialog(tk.Toplevel):
         self._on_closed = on_closed
         self._closed = False
         self._busy = False
-        self._secret_visible = False
+        self._secret_visible: dict[str, bool] = {}
+        self._secret_entries: dict[str, tuple[tk.Entry, LinkButton]] = {}
+        self._stt_auto_var = tk.BooleanVar(master=self, value=False)
         self._initial_spec = None
         self.entries: dict[str, tk.Entry] = {}
 
@@ -91,7 +101,7 @@ class SettingsDialog(tk.Toplevel):
         ).pack(fill="x")
         tk.Label(
             text_block,
-            text="全局快捷键与阿里云 OSS 配置",
+            text="全局快捷键、阿里云 OSS 与语音识别配置",
             font=(UI_FONT, 9),
             fg=theme.on_surface_variant,
             bg=theme.surface,
@@ -220,6 +230,73 @@ class SettingsDialog(tk.Toplevel):
             justify="left",
             wraplength=560,
         ).pack(fill="x", pady=(10, 0))
+
+        self._divider(body)
+        self._section_title(body, "语音识别（STT）")
+        tk.Label(
+            body,
+            text=(
+                "把录音上传到 OpenAI 兼容的语音识别接口，默认使用 Groq 的 "
+                "Whisper。API Key 留空则禁用该功能；语音会发送到填写的接口，"
+                "请注意隐私。"
+            ),
+            font=(UI_FONT, 9),
+            fg=theme.on_surface_variant,
+            bg=theme.surface,
+            anchor="w",
+            justify="left",
+            wraplength=560,
+        ).pack(fill="x", pady=(0, 12))
+
+        self.entries["stt_base"] = self._field(
+            body,
+            "stt_base",
+            "接口地址（Base URL）",
+            (
+                f"默认 {DEFAULT_BASE_URL}；也可填写硅基流动 "
+                "https://api.siliconflow.cn/v1"
+            ),
+        )
+        self.entries["stt_key"] = self._field(
+            body,
+            "stt_key",
+            "API Key",
+            "在 Groq 控制台创建；留空表示不启用语音识别",
+            secret=True,
+        )
+        self.entries["stt_model"] = self._field(
+            body,
+            "stt_model",
+            "模型",
+            (
+                f"默认 {DEFAULT_MODEL}；硅基流动可填 "
+                "FunAudioLLM/SenseVoiceSmall"
+            ),
+        )
+        self.entries["stt_language"] = self._field(
+            body,
+            "stt_language",
+            "语言",
+            f"默认 {DEFAULT_LANGUAGE}（中文）；留空由接口自动检测",
+        )
+
+        self.stt_auto_check = tk.Checkbutton(
+            body,
+            text="保存录音后自动识别文字（会产生接口费用）",
+            variable=self._stt_auto_var,
+            font=(UI_FONT, 9),
+            fg=theme.on_surface,
+            bg=theme.surface,
+            activebackground=theme.surface,
+            activeforeground=theme.on_surface,
+            selectcolor=theme.field,
+            anchor="w",
+            justify="left",
+            bd=0,
+            highlightthickness=0,
+            cursor="hand2",
+        )
+        self.stt_auto_check.pack(fill="x", pady=(2, 12))
 
         paths = tk.Frame(body, bg=theme.secondary_container)
         paths.pack(fill="x", pady=(12, 16))
@@ -362,15 +439,15 @@ class SettingsDialog(tk.Toplevel):
 
         if secret:
             entry.configure(show="•")
-            self._secret_entry = entry
-            self._secret_link = LinkButton(
+            link = LinkButton(
                 head,
                 "显示",
-                self._toggle_secret,
+                lambda key=key: self._toggle_secret(key),
                 theme=theme,
                 font=(UI_FONT, 8),
             )
-            self._secret_link.pack(side="right")
+            link.pack(side="right")
+            self._secret_entries[key] = (entry, link)
 
         entry.bind("<KeyRelease>", lambda _event, k=key: self._entry_edited(k))
 
@@ -446,6 +523,13 @@ class SettingsDialog(tk.Toplevel):
         self.entries["public"].insert(0, config.public_base_url)
         self.entries["prefix"].insert(0, config.key_prefix or DEFAULT_PREFIX)
 
+        stt = read_stt_config()
+        self.entries["stt_base"].insert(0, stt.base_url)
+        self.entries["stt_key"].insert(0, stt.api_key)
+        self.entries["stt_model"].insert(0, stt.model)
+        self.entries["stt_language"].insert(0, stt.language)
+        self._stt_auto_var.set(stt.auto)
+
         text = load_preferences().show_hotkey.strip()
         spec = None
         if text:
@@ -459,10 +543,12 @@ class SettingsDialog(tk.Toplevel):
         self.hotkey_input.set_spec(spec)
         self._initial_spec = spec
 
-    def _toggle_secret(self) -> None:
-        self._secret_visible = not self._secret_visible
-        self._secret_entry.configure(show="" if self._secret_visible else "•")
-        self._secret_link.set_text("隐藏" if self._secret_visible else "显示")
+    def _toggle_secret(self, key: str) -> None:
+        entry, link = self._secret_entries[key]
+        visible = not self._secret_visible.get(key, False)
+        self._secret_visible[key] = visible
+        entry.configure(show="" if visible else "•")
+        link.set_text("隐藏" if visible else "显示")
 
     def _entry_edited(self, key: str) -> None:
         entry = self.entries.get(key)
@@ -520,6 +606,33 @@ class SettingsDialog(tk.Toplevel):
             return None
 
         return config
+
+    def _collect_stt(self) -> STTConfig | None:
+        base = (
+            self.entries["stt_base"].get().strip() or DEFAULT_BASE_URL
+        )
+        valid = base.startswith("http://") or base.startswith("https://")
+        self.entries["stt_base"].configure(
+            highlightbackground=(
+                self._theme.outline if valid else self._theme.error
+            )
+        )
+        if not valid:
+            self._set_result(
+                "请检查：语音识别接口地址需要以 http:// 或 https:// 开头",
+                self._theme.error,
+            )
+            self.entries["stt_base"].focus_set()
+            return None
+        return STTConfig(
+            base_url=base,
+            api_key=self.entries["stt_key"].get().strip(),
+            model=(
+                self.entries["stt_model"].get().strip() or DEFAULT_MODEL
+            ),
+            language=self.entries["stt_language"].get().strip(),
+            auto=bool(self._stt_auto_var.get()),
+        )
 
     # ------------------------------------------------------------------ 操作
     def _set_result(self, text: str, color: str) -> None:
@@ -590,6 +703,10 @@ class SettingsDialog(tk.Toplevel):
             return
 
         config = self._collect()
+        stt_config = self._collect_stt()
+        if stt_config is None:
+            return
+
         try:
             save_preferences(
                 Preferences(
@@ -601,11 +718,21 @@ class SettingsDialog(tk.Toplevel):
             messagebox.showerror("保存失败", str(exc), parent=self)
             return
 
+        try:
+            save_stt_config(stt_config)
+        except Exception as exc:
+            self._set_result(
+                f"保存语音识别设置失败：{exc}", self._theme.error
+            )
+            messagebox.showerror("保存失败", str(exc), parent=self)
+            return
+
         self._initial_spec = spec
         if config is None:
-            # 快捷键已保存；OSS 配置还不完整，保持窗口打开以便继续填写。
+            # 快捷键与 STT 已保存；OSS 配置还不完整，保持窗口打开以便继续填写。
             self._set_result(
-                "快捷键已保存；阿里云 OSS 配置未填写完整，暂未保存 OSS 设置。",
+                "快捷键与语音识别设置已保存；阿里云 OSS 配置未填写完整，"
+                "暂未保存 OSS 设置。",
                 self._theme.on_surface_variant,
             )
             if self._on_saved is not None:
