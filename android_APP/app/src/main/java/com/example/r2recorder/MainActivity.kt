@@ -119,7 +119,7 @@ class MainActivity : AppCompatActivity(), RecordingAdapter.Callbacks {
         val configured = settingsStore.configOrNull() != null
         binding.configBanner.isVisible = !configured
         if (configured) {
-            UploadManager.enqueuePendingLocal(this)
+            // 打开应用只做下行同步；上传只在录音刚完成或用户手动点击上传时触发。
             startCloudSync()
         }
     }

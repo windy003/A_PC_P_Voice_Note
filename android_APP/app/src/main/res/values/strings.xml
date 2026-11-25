@@ -43,6 +43,7 @@
     <string name="action_play">播放</string>
     <string name="action_stop_play">停止</string>
     <string name="action_open">打开</string>
+    <string name="action_upload">上传</string>
     <string name="action_retry">重试</string>
     <string name="action_delete">删除</string>
     <string name="action_retry_all">重试全部上传</string>

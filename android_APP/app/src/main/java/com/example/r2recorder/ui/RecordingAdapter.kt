@@ -80,6 +80,10 @@ class RecordingAdapter(
             binding.btnOpen.isVisible = !item.remoteUrl.isNullOrBlank()
             binding.btnRetry.isVisible =
                 item.status == UploadStatus.LOCAL || item.status == UploadStatus.FAILED
+            binding.btnRetry.text = context.getString(
+                if (item.status == UploadStatus.LOCAL) R.string.action_upload
+                else R.string.action_retry
+            )
 
             binding.btnPlay.setOnClickListener { callbacks.onPlay(item) }
             binding.btnOpen.setOnClickListener { callbacks.onOpen(item) }
