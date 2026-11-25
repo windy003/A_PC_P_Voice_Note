@@ -332,6 +332,7 @@ class Player:
         self,
         path: str | Path,
         on_finished: Callable[[str | None], None],
+        on_started: Callable[[], None] | None = None,
     ) -> None:
         if not AUDIO_AVAILABLE:
             raise AudioError("缺少音频库 sounddevice / numpy，无法播放")
@@ -349,6 +350,11 @@ class Player:
                 samples, samplerate = load_audio(target, self._cache_dir)
                 if token.stop_event.is_set():
                     return
+                if on_started is not None:
+                    try:
+                        on_started()
+                    except Exception:
+                        pass
                 sd.play(samples, samplerate)
                 sd.wait()
             except Exception as exc:

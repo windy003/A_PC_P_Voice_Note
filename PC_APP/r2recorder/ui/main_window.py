@@ -36,7 +36,7 @@ from .settings_dialog import SettingsDialog
 from .theme import MONO_FONT, Theme, UI_FONT
 from .toast import GlobalToast, Toast
 from .tray import Tray, icon_image
-from .widgets import LinkButton, PillButton, ScrollFrame, StatusChip
+from .widgets import LinkButton, PillButton, PlaybackProgress, ScrollFrame, StatusChip
 
 try:
     from PIL import ImageTk
@@ -46,6 +46,7 @@ except Exception:  # pragma: no cover - Pillow 缺失时跳过窗口图标
 logger = logging.getLogger(__name__)
 
 MIN_DURATION_MS = 800
+PLAY_PROGRESS_INTERVAL_MS = 200
 STATUS_TEXT = {
     UploadStatus.LOCAL: "待上传",
     UploadStatus.UPLOADING: "上传中",
@@ -77,6 +78,14 @@ class MainWindow(tk.Tk):
         self._last_window_state = ""
         self._ticker_id: str | None = None
         self._playing_id: str | None = None
+        self._play_links: dict[str, LinkButton] = {}
+        self._progress_by_id: dict[str, PlaybackProgress] = {}
+        self._play_started_at: float | None = None
+        self._play_duration_ms = 0
+        self._play_progress_job: str | None = None
+        self._selected_id: str | None = None
+        self._selected_index = 0
+        self._list_cards: list[tuple[Recording, tk.Frame]] = []
         self._settings_dialog: SettingsDialog | None = None
         self._record_busy = False
         self._closed = False
@@ -334,6 +343,7 @@ class MainWindow(tk.Tk):
         # 录音列表
         self.scroll = ScrollFrame(self, theme)
         self.scroll.pack(fill="both", expand=True, padx=24, pady=(0, 6))
+        self._setup_list_keyboard()
 
         # 底部
         footer = tk.Frame(self, bg=theme.surface)
@@ -784,9 +794,14 @@ class MainWindow(tk.Tk):
         if self._closed:
             return
         ordered = self._sort_recordings(items)
+        previous_id = self._selected_id
+        previous_index = self._selected_index
         position = self.scroll.view_position()
         for child in self.scroll.inner.winfo_children():
             child.destroy()
+        self._list_cards = []
+        self._play_links = {}
+        self._progress_by_id = {}
 
         if not ordered:
             tk.Label(
@@ -803,7 +818,165 @@ class MainWindow(tk.Tk):
 
         self.count_label.configure(text=f"{len(ordered)} 条" if ordered else "")
         self.scroll.canvas.yview_moveto(position)
+        self._restore_list_selection(previous_id, previous_index)
+        self._restore_play_progress()
         self._notify_status_changes(ordered)
+
+    # ------------------------------------------------------------------ 列表键盘
+    def _setup_list_keyboard(self) -> None:
+        canvas = self.scroll.canvas
+        canvas.configure(takefocus=1)
+        # 让 Tab 直接落到列表画布，而不是先停在被隐藏的滚动条上。
+        try:
+            self.scroll.vsb.configure(takefocus=0)
+        except tk.TclError:
+            pass
+        canvas.bind("<Up>", self._on_list_up)
+        canvas.bind("<Down>", self._on_list_down)
+        canvas.bind("<space>", self._on_list_toggle_play)
+        canvas.bind("<Delete>", self._on_list_delete)
+        canvas.bind("<KP_Delete>", self._on_list_delete)
+        canvas.bind("<FocusIn>", self._on_list_focus)
+
+    def _on_list_focus(self, _event=None) -> None:
+        if not self._list_cards:
+            return
+        if self._selected_id is None:
+            self._select_list_index(0, focus=False)
+        else:
+            self._scroll_selected_into_view()
+
+    def _on_list_up(self, _event=None) -> str:
+        if self._list_cards:
+            current = self._current_list_index()
+            target = current - 1 if current >= 0 else len(self._list_cards) - 1
+            self._select_list_index(target)
+        return "break"
+
+    def _on_list_down(self, _event=None) -> str:
+        if self._list_cards:
+            current = self._current_list_index()
+            target = current + 1 if current >= 0 else 0
+            self._select_list_index(target)
+        return "break"
+
+    def _on_list_toggle_play(self, _event=None) -> str:
+        recording = self._selected_recording()
+        if recording is not None:
+            self._toggle_play(recording)
+            self.after_idle(self._focus_list)
+        return "break"
+
+    def _on_list_delete(self, _event=None) -> str:
+        recording = self._selected_recording()
+        if recording is not None:
+            self._delete(recording)
+            self.after_idle(self._focus_list)
+        return "break"
+
+    def _focus_list(self) -> None:
+        try:
+            self.scroll.canvas.focus_set()
+        except tk.TclError:
+            pass
+
+    def _current_list_index(self) -> int:
+        if self._selected_id is None:
+            return -1
+        for index, (recording, _card) in enumerate(self._list_cards):
+            if recording.id == self._selected_id:
+                return index
+        return -1
+
+    def _selected_recording(self) -> Recording | None:
+        index = self._current_list_index()
+        if index < 0:
+            return None
+        return self._list_cards[index][0]
+
+    def _select_list_index(self, index: int, *, focus: bool = False) -> None:
+        if not self._list_cards:
+            self._selected_id = None
+            return
+        index = max(0, min(index, len(self._list_cards) - 1))
+        self._selected_index = index
+        self._selected_id = self._list_cards[index][0].id
+        self._apply_list_selection()
+        self._scroll_card_into_view(self._list_cards[index][1])
+        if focus:
+            self.scroll.canvas.focus_set()
+
+    def _restore_list_selection(self, previous_id: str | None, previous_index: int) -> None:
+        if not self._list_cards:
+            self._selected_id = None
+            self._selected_index = 0
+            return
+        if previous_id is None:
+            self._apply_list_selection()
+            return
+
+        index = next(
+            (
+                i
+                for i, (recording, _card) in enumerate(self._list_cards)
+                if recording.id == previous_id
+            ),
+            None,
+        )
+        if index is not None:
+            self._selected_index = index
+            self._selected_id = previous_id
+            self._apply_list_selection()
+            return
+
+        # 原来选中的条目已被删除：选中删除位置上的下一条（最后一条则选前一条）。
+        index = max(0, min(previous_index, len(self._list_cards) - 1))
+        self._selected_index = index
+        self._selected_id = self._list_cards[index][0].id
+        self._apply_list_selection()
+        self.after_idle(self._scroll_selected_into_view)
+
+    def _scroll_selected_into_view(self) -> None:
+        index = self._current_list_index()
+        if index >= 0:
+            self._scroll_card_into_view(self._list_cards[index][1])
+
+    def _apply_list_selection(self) -> None:
+        for recording, card in self._list_cards:
+            selected = recording.id == self._selected_id
+            try:
+                card.configure(
+                    highlightbackground=(
+                        self.theme.primary if selected else self.theme.outline
+                    )
+                )
+            except tk.TclError:
+                pass
+
+    def _scroll_card_into_view(self, card: tk.Frame) -> None:
+        try:
+            canvas = self.scroll.canvas
+            canvas.update_idletasks()
+            bbox = canvas.bbox("all")
+            if bbox is None:
+                return
+            content_height = bbox[3] - bbox[1]
+            viewport_height = canvas.winfo_height()
+            if content_height <= 0 or viewport_height <= 0:
+                return
+            top = card.winfo_y() - bbox[1]
+            bottom = top + card.winfo_height()
+            view_top = canvas.canvasy(0)
+            view_bottom = view_top + viewport_height
+            margin = 6
+            if top < view_top + margin:
+                canvas.yview_moveto(max(0.0, (top - margin) / content_height))
+            elif bottom > view_bottom - margin:
+                canvas.yview_moveto(
+                    max(0.0, (bottom - viewport_height + margin) / content_height)
+                )
+        except tk.TclError:
+            pass
 
     def _sort_label(self) -> str:
         return "时间倒序 ↓" if self._sort_descending else "时间正序 ↑"
@@ -855,7 +1028,7 @@ class MainWindow(tk.Tk):
         card = tk.Frame(
             parent,
             bg=theme.card,
-            highlightthickness=1,
+            highlightthickness=2,
             highlightbackground=theme.outline,
         )
         card.pack(fill="x", pady=(0, 10))
@@ -949,13 +1122,32 @@ class MainWindow(tk.Tk):
         )
         play_link.pack(side="right", padx=(0, 8))
         play_link.set_enabled(recording.local_path.exists())
+        self._play_links[recording.id] = play_link
+
+        progress = PlaybackProgress(card, theme)
+        progress.place(x=0, rely=1.0, anchor="sw", relwidth=1.0)
+        progress.place_forget()
+        self._progress_by_id[recording.id] = progress
+
+        self._list_cards.append((recording, card))
 
     # ------------------------------------------------------------------ 操作
+    def _update_play_links(self) -> None:
+        """只刷新播放/停止文字，避免重建整个列表导致闪烁。"""
+        for recording_id, link in self._play_links.items():
+            try:
+                link.set_text(
+                    "停止" if recording_id == self._playing_id else "播放"
+                )
+            except tk.TclError:
+                pass
+
     def _toggle_play(self, recording: Recording) -> None:
         if self._playing_id == recording.id:
             self.player.stop()
             self._playing_id = None
-            self._refresh_records(self.repository.snapshot())
+            self._update_play_links()
+            self._stop_play_progress()
             return
 
         path = recording.local_path
@@ -963,32 +1155,132 @@ class MainWindow(tk.Tk):
             messagebox.showwarning("无法播放", "本地录音文件不存在。", parent=self)
             return
 
+        self._stop_play_progress()
+        duration_ms = recording.duration_ms
+        if duration_ms <= 0:
+            try:
+                duration_ms = audio.probe_duration_ms(path)
+            except Exception:
+                duration_ms = 0
+        self._play_duration_ms = max(0, int(duration_ms))
         self._playing_id = recording.id
-        self._refresh_records(self.repository.snapshot())
+        self._update_play_links()
         try:
             self.player.play(
                 path,
                 lambda error: self.post(
                     lambda: self._on_play_finished(recording.id, error)
                 ),
+                lambda: self.post(
+                    lambda: self._on_play_started(recording.id)
+                ),
             )
         except audio.AudioError as exc:
             self._playing_id = None
-            self._refresh_records(self.repository.snapshot())
+            self._update_play_links()
+            self._stop_play_progress()
             messagebox.showerror("无法播放", str(exc), parent=self)
         except Exception as exc:
             logger.exception("播放失败")
             self._playing_id = None
-            self._refresh_records(self.repository.snapshot())
+            self._update_play_links()
+            self._stop_play_progress()
             messagebox.showerror("无法播放", str(exc), parent=self)
+
+    def _on_play_started(self, recording_id: str) -> None:
+        if self._playing_id != recording_id:
+            return
+        self._play_started_at = time.monotonic()
+        self._place_play_progress(recording_id, 0.0)
+        self._schedule_play_progress_tick()
 
     def _on_play_finished(self, recording_id: str, error: str | None) -> None:
         if self._playing_id != recording_id:
             return
         self._playing_id = None
-        self._refresh_records(self.repository.snapshot())
+        self._update_play_links()
+        self._stop_play_progress()
         if error:
             messagebox.showerror("无法播放", error, parent=self)
+
+    def _place_play_progress(
+        self,
+        recording_id: str,
+        progress: float | None = None,
+    ) -> None:
+        widget = self._progress_by_id.get(recording_id)
+        if widget is None:
+            return
+        try:
+            if progress is not None:
+                widget.set_progress(progress)
+            widget.place(x=0, rely=1.0, anchor="sw", relwidth=1.0)
+            widget.lift()
+        except tk.TclError:
+            pass
+
+    def _restore_play_progress(self) -> None:
+        """列表重建后，把正在播放条目的进度条重新挂到新卡片上。"""
+        recording_id = self._playing_id
+        started_at = self._play_started_at
+        if recording_id is None or started_at is None:
+            return
+        progress = 0.0
+        if self._play_duration_ms > 0:
+            progress = min(
+                1.0,
+                ((time.monotonic() - started_at) * 1000.0)
+                / self._play_duration_ms,
+            )
+        self._place_play_progress(recording_id, progress)
+
+    def _schedule_play_progress_tick(self) -> None:
+        self._cancel_play_progress_tick()
+        self._play_progress_job = self.after(
+            PLAY_PROGRESS_INTERVAL_MS,
+            self._tick_play_progress,
+        )
+
+    def _cancel_play_progress_tick(self) -> None:
+        if self._play_progress_job is None:
+            return
+        try:
+            self.after_cancel(self._play_progress_job)
+        except tk.TclError:
+            pass
+        self._play_progress_job = None
+
+    def _tick_play_progress(self) -> None:
+        self._play_progress_job = None
+        recording_id = self._playing_id
+        started_at = self._play_started_at
+        if recording_id is None or started_at is None:
+            return
+        progress = 0.0
+        if self._play_duration_ms > 0:
+            progress = min(
+                1.0,
+                ((time.monotonic() - started_at) * 1000.0)
+                / self._play_duration_ms,
+            )
+        widget = self._progress_by_id.get(recording_id)
+        if widget is not None:
+            try:
+                widget.set_progress(progress)
+            except tk.TclError:
+                pass
+        self._schedule_play_progress_tick()
+
+    def _stop_play_progress(self) -> None:
+        self._cancel_play_progress_tick()
+        self._play_started_at = None
+        self._play_duration_ms = 0
+        for widget in self._progress_by_id.values():
+            try:
+                widget.reset()
+                widget.place_forget()
+            except tk.TclError:
+                pass
 
     def _open_remote(self, recording: Recording) -> None:
         if not recording.remote_url:
@@ -1029,6 +1321,8 @@ class MainWindow(tk.Tk):
         if self._playing_id == recording.id:
             self.player.stop()
             self._playing_id = None
+            self._update_play_links()
+            self._stop_play_progress()
         try:
             recording.local_path.unlink(missing_ok=True)
         except OSError:
@@ -1206,6 +1500,7 @@ class MainWindow(tk.Tk):
                 pass
             self._state_watch_id = None
         self.player.stop()
+        self._stop_play_progress()
         self.uploader.stop()
         self.sync_manager.shutdown()
         self.hotkey.stop()

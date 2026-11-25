@@ -308,6 +308,61 @@ class StatusChip(tk.Canvas):
         )
 
 
+class PlaybackProgress(tk.Canvas):
+    """卡片底部的细播放进度条。"""
+
+    HEIGHT = 4
+
+    def __init__(self, master: tk.Misc, theme: Theme):
+        super().__init__(
+            master,
+            height=self.HEIGHT,
+            bg=theme.card,
+            highlightthickness=0,
+            bd=0,
+            takefocus=0,
+        )
+        self._theme = theme
+        self._progress = 0.0
+        self.bind("<Configure>", lambda _event: self._draw())
+
+    def set_progress(self, progress: float) -> None:
+        value = max(0.0, min(1.0, float(progress)))
+        if abs(value - self._progress) < 0.001:
+            return
+        self._progress = value
+        self._draw()
+
+    def reset(self) -> None:
+        self._progress = 0.0
+        self._draw()
+
+    def _draw(self) -> None:
+        try:
+            self.delete("all")
+            width = max(1, self.winfo_width())
+            height = max(1, self.winfo_height())
+            self.create_rectangle(
+                0,
+                0,
+                width,
+                height,
+                fill=self._theme.error_container,
+                outline="",
+            )
+            if self._progress > 0:
+                self.create_rectangle(
+                    0,
+                    0,
+                    width * self._progress,
+                    height,
+                    fill=self._theme.record_red,
+                    outline="",
+                )
+        except tk.TclError:
+            pass
+
+
 class ScrollFrame(tk.Frame):
     """Canvas + 内部 Frame 组成的可滚动区域。"""
 
