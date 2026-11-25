@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import os
 import re
-import tempfile
 import threading
 import time
 import uuid
@@ -19,11 +17,10 @@ from typing import Callable
 from . import audio, oss
 from .config import OSSConfig
 from .model import Recording, RecordingRepository, UploadStatus
-from .paths import DATA_DIR, RECORDINGS_DIR
+from .paths import RECORDINGS_DIR
 
 logger = logging.getLogger(__name__)
 
-PENDING_DELETES_PATH = DATA_DIR / "pending_deletes.json"
 AUDIO_SUFFIXES = {
     ".m4a",
     ".mp4",
@@ -45,7 +42,6 @@ class SyncResult:
     downloaded: int = 0
     deleted_local: int = 0
     download_failed: int = 0
-    pending_failed: int = 0
 
 
 def format_sync_result(result: SyncResult) -> tuple[str, bool]:
@@ -59,74 +55,7 @@ def format_sync_result(result: SyncResult) -> tuple[str, bool]:
     )
     if result.download_failed:
         text += f"；{result.download_failed} 条下载失败"
-    if result.pending_failed:
-        text += f"；{result.pending_failed} 条云端删除待重试"
     return text, False
-
-
-class PendingDeletes:
-    """本机已删除、但云端还没删掉的 object key。"""
-
-    def __init__(self, path: str | os.PathLike[str] = PENDING_DELETES_PATH):
-        self._path = Path(path)
-        self._lock = threading.Lock()
-        self._keys = self._load()
-
-    def snapshot(self) -> set[str]:
-        with self._lock:
-            return set(self._keys)
-
-    def add(self, key: str) -> None:
-        key = str(key).strip()
-        if not key:
-            return
-        with self._lock:
-            if key in self._keys:
-                return
-            self._keys.add(key)
-            self._persist_locked()
-
-    def remove(self, key: str) -> None:
-        with self._lock:
-            if key not in self._keys:
-                return
-            self._keys.discard(key)
-            self._persist_locked()
-
-    def _load(self) -> set[str]:
-        try:
-            raw = json.loads(self._path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, ValueError):
-            return set()
-        if isinstance(raw, dict):
-            raw = raw.get("keys", [])
-        if not isinstance(raw, list):
-            return set()
-        return {str(item) for item in raw if str(item).strip()}
-
-    def _persist_locked(self) -> None:
-        try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            fd, temp_path = tempfile.mkstemp(
-                prefix=".pending.", dir=str(self._path.parent)
-            )
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-                    json.dump(
-                        sorted(self._keys),
-                        handle,
-                        ensure_ascii=False,
-                        indent=2,
-                    )
-                    handle.write("\n")
-                os.replace(temp_path, self._path)
-            finally:
-                try:
-                    os.unlink(temp_path)
-                except FileNotFoundError:
-                    pass
-        except OSError:
-            logger.exception("保存待删除列表失败")
 
 
 class SyncManager:
@@ -143,7 +72,6 @@ class SyncManager:
         self._config_provider = config_provider
         self._post = post
         self._on_message = on_message
-        self._pending = PendingDeletes()
         self._network_lock = threading.Lock()
         self._run_lock = threading.Lock()
         self._running = False
@@ -171,7 +99,6 @@ class SyncManager:
     ) -> None:
         if self._closed:
             return
-        self._pending.add(object_key)
         threading.Thread(
             target=self._delete_worker,
             args=(object_key, label),
@@ -227,7 +154,6 @@ class SyncManager:
                 deleted = False
             cloud_count = self._count_remote_audio(config)
         if deleted:
-            self._pending.remove(object_key)
             logger.info("云端删除成功：%s", label)
             self._post_message(
                 self._delete_result_text("成功", cloud_count),
@@ -236,7 +162,7 @@ class SyncManager:
             )
         else:
             self._post_message(
-                self._delete_result_text("失败，将在下次同步重试", cloud_count),
+                self._delete_result_text("失败", cloud_count),
                 True,
                 include_total=False,
             )
@@ -274,17 +200,7 @@ class SyncManager:
 
         result = SyncResult(configured=True, connected=False)
         with self._network_lock:
-            # 1. 先把本机待删除的对象从云端删掉。
-            for key in list(self._pending.snapshot()):
-                try:
-                    oss.delete_object(config, key)
-                except Exception:
-                    result.pending_failed += 1
-                    logger.warning("删除云端对象失败：%s", key, exc_info=True)
-                    continue
-                self._pending.remove(key)
-
-            # 2. 在拉取列表之前记录本地状态，避免同步中途上传完成的文件被误删。
+            # 1. 在拉取列表之前记录本地状态，避免同步中途上传完成的文件被误删。
             local_items = self._repository.snapshot()
             all_local_keys: set[str] = set()
             uploaded: dict[str, Recording] = {}
@@ -296,7 +212,7 @@ class SyncManager:
                 if recording.status == UploadStatus.UPLOADED:
                     uploaded[key] = recording
 
-            # 3. 拉云端列表；列表失败时不做任何本地删除。
+            # 2. 拉云端列表；列表失败时不做任何本地删除。
             try:
                 objects = oss.list_objects(config, config.normalized_prefix)
             except Exception as exc:
@@ -307,7 +223,7 @@ class SyncManager:
                 obj.key: obj for obj in objects if _is_audio_key(obj.key)
             }
 
-            # 4. 老版本记录没有 bucket/prefix 信息，确认云端存在后补上。
+            # 3. 老版本记录没有 bucket/prefix 信息，确认云端存在后补上。
             for key, recording in uploaded.items():
                 if (
                     recording.remote_bucket is None
@@ -324,10 +240,9 @@ class SyncManager:
                         ),
                     )
 
-            # 5. 下载云端有、本地没有的录音。
-            pending = self._pending.snapshot()
+            # 4. 下载云端有、本地没有的录音。
             for key, remote_object in remote.items():
-                if key in all_local_keys or key in pending:
+                if key in all_local_keys:
                     continue
                 try:
                     self._download_one(config, key, remote_object)
@@ -340,10 +255,9 @@ class SyncManager:
                 all_local_keys.add(key)
                 result.downloaded += 1
 
-            # 6. 云端没有、本地已上传的录音：确认 404 后删除本地。
-            pending = self._pending.snapshot()
+            # 5. 云端没有、本地已上传的录音：确认 404 后删除本地。
             for key, recording in uploaded.items():
-                if key in remote or key in pending:
+                if key in remote:
                     continue
                 if (
                     recording.remote_endpoint != config.endpoint_host
