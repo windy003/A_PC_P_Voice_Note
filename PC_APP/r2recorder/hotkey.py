@@ -253,7 +253,7 @@ class GlobalHotkey:
         self._started = True
         self._thread = threading.Thread(
             target=self._run,
-            name="r2-hotkey",
+            name="oss-hotkey",
             daemon=True,
         )
         self._thread.start()

@@ -16,7 +16,7 @@ except Exception:  # pragma: no cover - 依赖缺失时禁用托盘
     Image = None
     ImageDraw = None
 
-TITLE = "R2 录音机"
+TITLE = "OSS 录音机"
 
 
 def icon_image(size: int = 64):
@@ -83,7 +83,7 @@ class Tray:
         if not self.available or self._started:
             return self._started
         try:
-            icon = pystray.Icon("r2recorder", icon_image(), TITLE, self._menu())
+            icon = pystray.Icon("ossrecorder", icon_image(), TITLE, self._menu())
         except Exception:
             logger.exception("创建系统托盘图标失败")
             return False
@@ -92,7 +92,7 @@ class Tray:
         threading.Thread(
             target=self._run,
             args=(icon,),
-            name="r2-tray",
+            name="oss-tray",
             daemon=True,
         ).start()
         return True

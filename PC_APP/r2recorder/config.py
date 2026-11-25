@@ -1,33 +1,51 @@
-"""从项目文件夹的 .env 读取并保存 Cloudflare R2 配置。"""
+"""从项目文件夹的 .env 读取并保存阿里云 OSS 配置。"""
 
 from __future__ import annotations
 
 import os
 import re
+import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
 
-from .paths import ENV_PATH
+from .paths import ENV_EXAMPLE_PATH, ENV_PATH
 
 DEFAULT_PREFIX = "recordings/"
 
-KEY_ACCOUNT_ID = "R2_ACCOUNT_ID"
-KEY_BUCKET = "R2_BUCKET"
-KEY_ACCESS_KEY = "R2_ACCESS_KEY_ID"
-KEY_SECRET_KEY = "R2_SECRET_ACCESS_KEY"
-KEY_PUBLIC_URL = "R2_PUBLIC_BASE_URL"
-KEY_PREFIX = "R2_KEY_PREFIX"
+KEY_ENDPOINT = "OSS_ENDPOINT"
+KEY_REGION = "OSS_REGION"
+KEY_BUCKET = "OSS_BUCKET"
+KEY_ACCESS_KEY = "OSS_ACCESS_KEY_ID"
+KEY_SECRET_KEY = "OSS_ACCESS_KEY_SECRET"
+KEY_PUBLIC_URL = "OSS_PUBLIC_BASE_URL"
+KEY_PREFIX = "OSS_KEY_PREFIX"
 
 ENV_KEYS = (
-    KEY_ACCOUNT_ID,
+    KEY_ENDPOINT,
+    KEY_REGION,
     KEY_BUCKET,
     KEY_ACCESS_KEY,
     KEY_SECRET_KEY,
     KEY_PUBLIC_URL,
     KEY_PREFIX,
 )
+
+_ENV_TEMPLATE = """# 阿里云 OSS 配置示例。
+# 直接编辑本文件保存后，重启应用即可生效。
+# Endpoint 可在 OSS 控制台 Bucket 概览页查看，例如 oss-cn-hangzhou.aliyuncs.com
+OSS_ENDPOINT=
+# 可选：地域 ID，例如 cn-hangzhou；留空时根据 Endpoint 自动推断
+OSS_REGION=
+OSS_BUCKET=
+OSS_ACCESS_KEY_ID=
+OSS_ACCESS_KEY_SECRET=
+# 可选：公开访问域名，例如 https://my-bucket.oss-cn-hangzhou.aliyuncs.com
+OSS_PUBLIC_BASE_URL=
+# 可选：对象前缀，默认 recordings/
+OSS_KEY_PREFIX=recordings/
+"""
 
 
 def _unescape_double_quoted(value: str) -> str:
@@ -87,6 +105,22 @@ def load_env(path: str | os.PathLike[str] = ENV_PATH) -> dict[str, str]:
     return parse_env_text(text)
 
 
+def ensure_env_file(path: str | os.PathLike[str] = ENV_PATH) -> None:
+    """首次运行时根据 .env.example 生成 .env，方便直接编辑文件配置。"""
+    target = Path(path)
+    if target.exists():
+        return
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if ENV_EXAMPLE_PATH.is_file():
+            shutil.copyfile(ENV_EXAMPLE_PATH, target)
+        else:
+            target.write_text(_ENV_TEMPLATE, encoding="utf-8", newline="\n")
+    except OSError:
+        # 配置模板不可用时不影响程序启动，用户仍可在设置窗口里配置。
+        pass
+
+
 def _encode_env_value(value: str) -> str:
     value = str(value)
     if value == "":
@@ -132,7 +166,7 @@ def update_env_file(
     if missing:
         if output and output[-1].strip():
             output.append("")
-        output.append("# ---- R2 配置 ----")
+        output.append("# ---- 阿里云 OSS 配置 ----")
         for key in missing:
             output.append(f"{key}={_encode_env_value(updates[key])}")
 
@@ -151,17 +185,54 @@ def update_env_file(
 
 
 @dataclass(frozen=True)
-class R2Config:
-    account_id: str
+class OSSConfig:
+    endpoint: str
     bucket: str
     access_key_id: str
-    secret_access_key: str
+    access_key_secret: str
+    region: str = ""
     public_base_url: str = ""
     key_prefix: str = DEFAULT_PREFIX
 
     @property
     def endpoint_host(self) -> str:
-        return f"{self.account_id}.r2.cloudflarestorage.com"
+        """去掉协议与末尾斜杠后的 Endpoint 主机名，例如 oss-cn-hangzhou.aliyuncs.com。"""
+        host = self.endpoint.strip()
+        lowered = host.lower()
+        for scheme in ("https://", "http://"):
+            if lowered.startswith(scheme):
+                host = host[len(scheme):]
+                break
+        return host.rstrip("/").split("/", 1)[0]
+
+    @property
+    def resolved_region(self) -> str:
+        """V4 签名所需的地域 ID；留空时从标准 Endpoint 推断，例如 cn-hangzhou。"""
+        explicit = self.region.strip()
+        if explicit:
+            return explicit
+        for label in self.endpoint_host.lower().split("."):
+            if not label.startswith("oss-"):
+                continue
+            region = label[len("oss-"):]
+            if region.endswith("-internal"):
+                region = region[: -len("-internal")]
+            if not region or region.startswith("accelerate"):
+                # 全球加速域名不包含地域信息，必须手动填写 Region。
+                return ""
+            return region
+        return ""
+
+    @property
+    def request_host(self) -> str:
+        """虚拟主机风格的请求域名：Bucket.Endpoint。
+
+        如果用户粘贴的 Endpoint 已经带了 Bucket 前缀，则直接使用，避免重复。
+        """
+        host = self.endpoint_host
+        if host.lower().startswith(f"{self.bucket.lower()}."):
+            return host
+        return f"{self.bucket}.{host}"
 
     @property
     def normalized_prefix(self) -> str:
@@ -189,37 +260,40 @@ class R2Config:
         return all(
             value.strip()
             for value in (
-                self.account_id,
+                self.endpoint,
+                self.resolved_region,
                 self.bucket,
                 self.access_key_id,
-                self.secret_access_key,
+                self.access_key_secret,
             )
         )
 
 
-def read_config(path: str | os.PathLike[str] = ENV_PATH) -> R2Config:
+def read_config(path: str | os.PathLike[str] = ENV_PATH) -> OSSConfig:
     values = load_env(path)
-    return R2Config(
-        account_id=values.get(KEY_ACCOUNT_ID, "").strip(),
+    return OSSConfig(
+        endpoint=values.get(KEY_ENDPOINT, "").strip(),
+        region=values.get(KEY_REGION, "").strip(),
         bucket=values.get(KEY_BUCKET, "").strip(),
         access_key_id=values.get(KEY_ACCESS_KEY, "").strip(),
-        secret_access_key=values.get(KEY_SECRET_KEY, "").strip(),
+        access_key_secret=values.get(KEY_SECRET_KEY, "").strip(),
         public_base_url=values.get(KEY_PUBLIC_URL, "").strip(),
         key_prefix=values.get(KEY_PREFIX, DEFAULT_PREFIX).strip() or DEFAULT_PREFIX,
     )
 
 
 def save_config(
-    config: R2Config,
+    config: OSSConfig,
     path: str | os.PathLike[str] = ENV_PATH,
 ) -> None:
     update_env_file(
         path,
         {
-            KEY_ACCOUNT_ID: config.account_id.strip(),
+            KEY_ENDPOINT: config.endpoint.strip(),
+            KEY_REGION: config.region.strip(),
             KEY_BUCKET: config.bucket.strip(),
             KEY_ACCESS_KEY: config.access_key_id.strip(),
-            KEY_SECRET_KEY: config.secret_access_key.strip(),
+            KEY_SECRET_KEY: config.access_key_secret.strip(),
             KEY_PUBLIC_URL: config.public_base_url.strip(),
             KEY_PREFIX: config.key_prefix.strip() or DEFAULT_PREFIX,
         },

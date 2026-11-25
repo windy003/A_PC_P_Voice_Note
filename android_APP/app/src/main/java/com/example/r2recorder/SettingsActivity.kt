@@ -4,13 +4,12 @@ import android.os.Bundle
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.isVisible
 import androidx.lifecycle.lifecycleScope
-import com.example.r2recorder.data.R2Config
+import com.example.r2recorder.data.OssConfig
 import com.example.r2recorder.data.SettingsStore
 import com.example.r2recorder.databinding.ActivitySettingsBinding
-import com.example.r2recorder.r2.R2Client
+import com.example.r2recorder.oss.OssClient
 import com.example.r2recorder.util.Toasts
 import com.google.android.material.snackbar.Snackbar
-import com.google.android.material.textfield.TextInputLayout
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -29,12 +28,13 @@ class SettingsActivity : AppCompatActivity() {
         binding.toolbar.setNavigationOnClickListener { finish() }
 
         val config = settingsStore.read()
-        binding.etAccountId.setText(config.accountId)
+        binding.etEndpoint.setText(config.endpoint)
+        binding.etRegion.setText(config.region)
         binding.etBucket.setText(config.bucket)
         binding.etAccessKey.setText(config.accessKeyId)
-        binding.etSecretKey.setText(config.secretAccessKey)
+        binding.etSecretKey.setText(config.accessKeySecret)
         binding.etPublicUrl.setText(config.publicBaseUrl)
-        binding.etPrefix.setText(config.keyPrefix.ifBlank { R2Config.DEFAULT_PREFIX })
+        binding.etPrefix.setText(config.keyPrefix.ifBlank { OssConfig.DEFAULT_PREFIX })
 
         binding.btnSave.setOnClickListener {
             val form = readForm() ?: return@setOnClickListener
@@ -53,10 +53,11 @@ class SettingsActivity : AppCompatActivity() {
         }
     }
 
-    private fun readForm(): R2Config? {
+    private fun readForm(): OssConfig? {
         clearErrors()
 
-        val accountId = binding.etAccountId.text?.toString().orEmpty().trim()
+        val endpoint = binding.etEndpoint.text?.toString().orEmpty().trim()
+        val region = binding.etRegion.text?.toString().orEmpty().trim()
         val bucket = binding.etBucket.text?.toString().orEmpty().trim()
         val accessKey = binding.etAccessKey.text?.toString().orEmpty().trim()
         val secretKey = binding.etSecretKey.text?.toString().orEmpty().trim()
@@ -64,8 +65,8 @@ class SettingsActivity : AppCompatActivity() {
         val prefix = binding.etPrefix.text?.toString().orEmpty().trim()
 
         var valid = true
-        if (accountId.isEmpty()) {
-            binding.layoutAccountId.error = getString(R.string.error_required)
+        if (endpoint.isEmpty()) {
+            binding.layoutEndpoint.error = getString(R.string.error_required)
             valid = false
         }
         if (bucket.isEmpty()) {
@@ -87,20 +88,26 @@ class SettingsActivity : AppCompatActivity() {
             binding.layoutPublicUrl.error = getString(R.string.error_url_invalid)
             valid = false
         }
-        if (!valid) return null
 
-        return R2Config(
-            accountId = accountId,
+        val config = OssConfig(
+            endpoint = endpoint,
             bucket = bucket,
             accessKeyId = accessKey,
-            secretAccessKey = secretKey,
+            accessKeySecret = secretKey,
+            region = region,
             publicBaseUrl = publicUrl,
-            keyPrefix = prefix.ifBlank { R2Config.DEFAULT_PREFIX }
+            keyPrefix = prefix.ifBlank { OssConfig.DEFAULT_PREFIX }
         )
+        if (valid && config.resolvedRegion.isEmpty()) {
+            binding.layoutRegion.error = getString(R.string.error_region_required)
+            valid = false
+        }
+        return if (valid) config else null
     }
 
     private fun clearErrors() {
-        binding.layoutAccountId.error = null
+        binding.layoutEndpoint.error = null
+        binding.layoutRegion.error = null
         binding.layoutBucket.error = null
         binding.layoutAccessKey.error = null
         binding.layoutSecretKey.error = null
@@ -108,13 +115,13 @@ class SettingsActivity : AppCompatActivity() {
         binding.layoutPrefix.error = null
     }
 
-    private fun testConnection(config: R2Config) {
+    private fun testConnection(config: OssConfig) {
         setBusy(true)
         lifecycleScope.launch {
             val unknown = getString(R.string.unknown_error)
             val error = withContext(Dispatchers.IO) {
                 try {
-                    R2Client.testConnection(config)
+                    OssClient.testConnection(config)
                     null
                 } catch (e: Exception) {
                     e.message ?: unknown

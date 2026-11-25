@@ -1,4 +1,4 @@
-"""R2 云端与本地录音的增量同步。"""
+"""阿里云 OSS 云端与本地录音的增量同步。"""
 
 from __future__ import annotations
 
@@ -16,8 +16,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from . import audio, r2
-from .config import R2Config
+from . import audio, oss
+from .config import OSSConfig
 from .model import Recording, RecordingRepository, UploadStatus
 from .paths import DATA_DIR, RECORDINGS_DIR
 
@@ -50,7 +50,7 @@ class SyncResult:
 
 def format_sync_result(result: SyncResult) -> tuple[str, bool]:
     if not result.configured:
-        return "云端同步未执行：尚未配置 R2", False
+        return "云端同步未执行：尚未配置阿里云 OSS", False
     if not result.connected:
         return f"云端连接失败：{result.error or '未知错误'}", True
     text = (
@@ -135,7 +135,7 @@ class SyncManager:
     def __init__(
         self,
         repository: RecordingRepository,
-        config_provider: Callable[[], R2Config | None],
+        config_provider: Callable[[], OSSConfig | None],
         post: Callable[[Callable[[], None]], None],
         on_message: Callable[[str, bool, bool], None] | None = None,
     ):
@@ -160,7 +160,7 @@ class SyncManager:
         threading.Thread(
             target=self._sync_worker,
             args=(notify,),
-            name="r2-sync",
+            name="oss-sync",
             daemon=True,
         ).start()
 
@@ -175,7 +175,7 @@ class SyncManager:
         threading.Thread(
             target=self._delete_worker,
             args=(object_key, label),
-            name="r2-delete",
+            name="oss-delete",
             daemon=True,
         ).start()
 
@@ -213,14 +213,14 @@ class SyncManager:
         config = self._config_provider()
         if config is None:
             self._post_message(
-                self._delete_result_text("未执行（未配置 R2）", None),
+                self._delete_result_text("未执行（未配置阿里云 OSS）", None),
                 True,
                 include_total=False,
             )
             return
         with self._network_lock:
             try:
-                r2.delete_object(config, object_key)
+                oss.delete_object(config, object_key)
                 deleted = True
             except Exception:
                 logger.warning("云端删除失败：%s", object_key, exc_info=True)
@@ -241,9 +241,9 @@ class SyncManager:
                 include_total=False,
             )
 
-    def _count_remote_audio(self, config: R2Config) -> int | None:
+    def _count_remote_audio(self, config: OSSConfig) -> int | None:
         try:
-            objects = r2.list_objects(config, config.normalized_prefix)
+            objects = oss.list_objects(config, config.normalized_prefix)
         except Exception:
             logger.debug("统计云端录音数量失败", exc_info=True)
             return None
@@ -277,7 +277,7 @@ class SyncManager:
             # 1. 先把本机待删除的对象从云端删掉。
             for key in list(self._pending.snapshot()):
                 try:
-                    r2.delete_object(config, key)
+                    oss.delete_object(config, key)
                 except Exception:
                     result.pending_failed += 1
                     logger.warning("删除云端对象失败：%s", key, exc_info=True)
@@ -298,7 +298,7 @@ class SyncManager:
 
             # 3. 拉云端列表；列表失败时不做任何本地删除。
             try:
-                objects = r2.list_objects(config, config.normalized_prefix)
+                objects = oss.list_objects(config, config.normalized_prefix)
             except Exception as exc:
                 result.error = str(exc) or exc.__class__.__name__
                 return result
@@ -320,6 +320,7 @@ class SyncManager:
                             item,
                             remote_bucket=config.bucket,
                             remote_prefix=config.normalized_prefix,
+                            remote_endpoint=config.endpoint_host,
                         ),
                     )
 
@@ -345,13 +346,14 @@ class SyncManager:
                 if key in remote or key in pending:
                     continue
                 if (
-                    recording.remote_bucket != config.bucket
+                    recording.remote_endpoint != config.endpoint_host
+                    or recording.remote_bucket != config.bucket
                     or recording.remote_prefix != config.normalized_prefix
                 ):
-                    # 这条录音属于另一套 R2 配置，不能因为当前前缀看不到就删本地。
+                    # 这条录音属于另一套 OSS 配置，不能因为当前前缀看不到就删本地。
                     continue
                 try:
-                    if r2.object_exists(config, key):
+                    if oss.object_exists(config, key):
                         continue
                 except Exception:
                     logger.debug(
@@ -372,15 +374,15 @@ class SyncManager:
 
     def _download_one(
         self,
-        config: R2Config,
+        config: OSSConfig,
         key: str,
-        remote_object: r2.RemoteObject,
+        remote_object: oss.RemoteObject,
     ) -> Recording:
         desired = key.rsplit("/", 1)[-1] or "recording"
         desired = _safe_file_name(desired)
         file_name = self._unique_file_name(desired, key)
         target = RECORDINGS_DIR / file_name
-        r2.download(config, key, target)
+        oss.download(config, key, target)
 
         created_at = (
             _created_at_from_key(key)
@@ -398,6 +400,7 @@ class SyncManager:
             remote_url=config.public_url_for(key),
             remote_bucket=config.bucket,
             remote_prefix=config.normalized_prefix,
+            remote_endpoint=config.endpoint_host,
         )
         if self._repository.get(record.id) is not None:
             record = replace(record, id=uuid.uuid4().hex)

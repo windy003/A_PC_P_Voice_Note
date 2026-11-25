@@ -55,7 +55,7 @@ class MainActivity : AppCompatActivity(), RecordingAdapter.Callbacks {
     private var playingId: String? = null
     private var tickerJob: Job? = null
     private var syncJob: Job? = null
-    private var syncSuccessNotified = false
+    private var syncNotified = false
     private var startingRecording = false
     private var sortDescending = false
 
@@ -129,7 +129,7 @@ class MainActivity : AppCompatActivity(), RecordingAdapter.Callbacks {
         tickerJob = null
         releasePlayer()
         // 离开前台后重置，下次从后台回到应用时重新同步并提示一次。
-        syncSuccessNotified = false
+        syncNotified = false
         super.onStop()
     }
 
@@ -419,14 +419,14 @@ class MainActivity : AppCompatActivity(), RecordingAdapter.Callbacks {
             if (isFinishing || isDestroyed) return@launch
             if (!lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return@launch
             // 同一次前台停留期间 onResume 可能被多次触发（例如权限弹窗），
-            // 成功提示只显示一次；每次从后台回到应用后重新计数。
-            if (!result.connected || syncSuccessNotified) return@launch
-            syncSuccessNotified = true
-            val (text, _) = SyncManager.formatResult(result)
+            // 同步结果只提示一次；每次从后台回到应用后重新计数。
+            if (syncNotified) return@launch
+            syncNotified = true
+            val (text, isError) = SyncManager.formatResult(result)
             Snackbar.make(
                 binding.root,
                 Toasts.withTotalCount(this@MainActivity, text),
-                Snackbar.LENGTH_SHORT
+                if (isError) Snackbar.LENGTH_LONG else Snackbar.LENGTH_SHORT
             ).show()
         }
     }

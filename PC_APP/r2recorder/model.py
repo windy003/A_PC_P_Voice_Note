@@ -46,6 +46,7 @@ class Recording:
     error: str | None = None
     remote_bucket: str | None = None
     remote_prefix: str | None = None
+    remote_endpoint: str | None = None
 
     @property
     def local_path(self) -> Path:
@@ -71,6 +72,7 @@ class Recording:
                 error=_optional_str(data.get("error")),
                 remote_bucket=_optional_str(data.get("remote_bucket")),
                 remote_prefix=_optional_str(data.get("remote_prefix")),
+                remote_endpoint=_optional_str(data.get("remote_endpoint")),
             )
         except (KeyError, TypeError, ValueError):
             return None

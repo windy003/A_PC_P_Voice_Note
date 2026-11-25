@@ -20,7 +20,10 @@ ENV_EXAMPLE_PATH = APP_DIR / ".env.example"
 
 
 def _data_dir() -> Path:
-    override = os.environ.get("R2_RECORDER_DATA_DIR", "").strip()
+    override = os.environ.get("OSS_RECORDER_DATA_DIR", "").strip()
+    if not override:
+        # 兼容旧版本使用的环境变量名。
+        override = os.environ.get("R2_RECORDER_DATA_DIR", "").strip()
     if override:
         return Path(override).expanduser().resolve()
     return APP_DIR / "data"

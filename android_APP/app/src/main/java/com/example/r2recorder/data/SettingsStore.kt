@@ -10,40 +10,37 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
+/**
+ * 读取/保存用户在「OSS 设置」中手动填写的配置。
+ */
 class SettingsStore(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val cipher = SecretCipher()
 
-    fun read(): R2Config {
-        return R2Config(
-            accountId = prefs.getString(KEY_ACCOUNT_ID, "") ?: "",
-            bucket = prefs.getString(KEY_BUCKET, "") ?: "",
-            accessKeyId = cipher.decrypt(prefs.getString(KEY_ACCESS_KEY, "") ?: ""),
-            secretAccessKey = cipher.decrypt(prefs.getString(KEY_SECRET, "") ?: ""),
-            publicBaseUrl = prefs.getString(KEY_PUBLIC_URL, "") ?: "",
-            keyPrefix = prefs.getString(KEY_PREFIX, R2Config.DEFAULT_PREFIX) ?: R2Config.DEFAULT_PREFIX
+    fun read(): OssConfig {
+        return OssConfig(
+            endpoint = prefs.getString(KEY_ENDPOINT, "")?.trim().orEmpty(),
+            bucket = prefs.getString(KEY_BUCKET, "")?.trim().orEmpty(),
+            accessKeyId = cipher.decrypt(prefs.getString(KEY_ACCESS_KEY, "") ?: "").trim(),
+            accessKeySecret = cipher.decrypt(prefs.getString(KEY_SECRET, "") ?: "").trim(),
+            region = prefs.getString(KEY_REGION, "")?.trim().orEmpty(),
+            publicBaseUrl = prefs.getString(KEY_PUBLIC_URL, "")?.trim().orEmpty(),
+            keyPrefix = prefs.getString(KEY_PREFIX, OssConfig.DEFAULT_PREFIX)
+                ?.trim()
+                .orEmpty()
+                .ifEmpty { OssConfig.DEFAULT_PREFIX }
         )
     }
 
-    fun configOrNull(): R2Config? {
-        val config = read()
-        return if (config.accountId.isNotBlank() &&
-            config.bucket.isNotBlank() &&
-            config.accessKeyId.isNotBlank() &&
-            config.secretAccessKey.isNotBlank()
-        ) {
-            config
-        } else {
-            null
-        }
-    }
+    fun configOrNull(): OssConfig? = read().takeIf { it.isComplete }
 
-    fun save(config: R2Config) {
+    fun save(config: OssConfig) {
         val saved = prefs.edit()
-            .putString(KEY_ACCOUNT_ID, config.accountId.trim())
+            .putString(KEY_ENDPOINT, config.endpoint.trim())
+            .putString(KEY_REGION, config.region.trim())
             .putString(KEY_BUCKET, config.bucket.trim())
             .putString(KEY_ACCESS_KEY, cipher.encrypt(config.accessKeyId.trim()))
-            .putString(KEY_SECRET, cipher.encrypt(config.secretAccessKey.trim()))
+            .putString(KEY_SECRET, cipher.encrypt(config.accessKeySecret.trim()))
             .putString(KEY_PUBLIC_URL, config.publicBaseUrl.trim())
             .putString(KEY_PREFIX, config.keyPrefix.trim())
             // 同步写入磁盘，避免保存后马上更新/退出时还没落盘。
@@ -100,15 +97,16 @@ class SettingsStore(context: Context) {
 
         companion object {
             private const val KEYSTORE_PROVIDER = "AndroidKeyStore"
-            private const val KEY_ALIAS = "r2_recorder_credentials"
+            private const val KEY_ALIAS = "oss_recorder_credentials"
             private const val TRANSFORMATION = "AES/GCM/NoPadding"
             private const val IV_SIZE = 12
         }
     }
 
     companion object {
-        private const val PREFS_NAME = "r2_settings"
-        private const val KEY_ACCOUNT_ID = "account_id"
+        private const val PREFS_NAME = "oss_settings"
+        private const val KEY_ENDPOINT = "endpoint"
+        private const val KEY_REGION = "region"
         private const val KEY_BUCKET = "bucket"
         private const val KEY_ACCESS_KEY = "access_key"
         private const val KEY_SECRET = "secret_key"

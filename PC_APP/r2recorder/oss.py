@@ -1,4 +1,4 @@
-"""Cloudflare R2 的最小 S3 客户端（AWS Signature V4，区域 auto，路径风格）。"""
+"""阿里云 OSS 的最小 REST 客户端（Signature V4，虚拟主机风格）。"""
 
 from __future__ import annotations
 
@@ -15,14 +15,16 @@ from html import unescape
 from pathlib import Path
 from urllib.parse import quote
 
-from .config import R2Config
+from .config import OSSConfig
 
-ALGORITHM = "AWS4-HMAC-SHA256"
-REGION = "auto"
-SERVICE = "s3"
-EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
 TIMEOUT_SECONDS = 300
 LIST_PAGE_SIZE = 1000
+
+V4_ALGORITHM = "OSS4-HMAC-SHA256"
+V4_PRODUCT = "oss"
+V4_REQUEST = "aliyun_v4_request"
+UNSIGNED_PAYLOAD = "UNSIGNED-PAYLOAD"
+_DEFAULT_SIGNED_HEADERS = ("content-type", "content-md5")
 
 _CONTENT_TYPES = {
     ".m4a": "audio/mp4",
@@ -35,7 +37,7 @@ _CONTENT_TYPES = {
 }
 
 
-class R2Error(Exception):
+class OSSError(Exception):
     def __init__(self, code: int, detail: str):
         super().__init__(f"HTTP {code}: {detail}")
         self.code = code
@@ -46,7 +48,7 @@ class R2Error(Exception):
         return self.code in (408, 429) or self.code >= 500
 
 
-class R2NetworkError(Exception):
+class OSSNetworkError(Exception):
     """连接失败、超时等网络层错误。"""
 
 
@@ -54,101 +56,103 @@ def content_type_for(file_name: str) -> str:
     return _CONTENT_TYPES.get(Path(file_name).suffix.lower(), "application/octet-stream")
 
 
-def sha256_file(path: str | Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _encode_segment(value: str) -> str:
-    return quote(value, safe="-_.~")
+def _uri_encode(value: str, ignore_slashes: bool) -> str:
+    safe = "-_.~"
+    if ignore_slashes:
+        safe += "/"
+    return quote(value, safe=safe)
 
 
 def _canonical_query(params: dict[str, str]) -> str:
-    pairs = sorted(params.items())
-    return "&".join(f"{_encode_segment(str(k))}={_encode_segment(str(v))}" for k, v in pairs)
+    pairs = [
+        (_uri_encode(str(key), False), _uri_encode(str(value), False))
+        for key, value in params.items()
+    ]
+    pairs.sort(key=lambda pair: pair[0])
+    return "&".join(f"{key}={value}" if value else key for key, value in pairs)
 
 
-def _build_target(config: R2Config, object_key: str | None) -> tuple[str, str]:
-    host = config.endpoint_host
-    path = "/" + _encode_segment(config.bucket)
+def _canonical_uri(config: OSSConfig, object_key: str | None) -> str:
     if object_key:
-        for segment in object_key.split("/"):
-            if segment:
-                path += "/" + _encode_segment(segment)
-    return host, path
+        resource = f"/{config.bucket}/{object_key}"
+    else:
+        resource = f"/{config.bucket}/"
+    return _uri_encode(resource, True)
 
 
-def _sign(
-    config: R2Config,
+def _request_path(object_key: str | None) -> str:
+    path = "/" + object_key if object_key else "/"
+    return _uri_encode(path, True)
+
+
+def _canonical_headers(headers: dict[str, str], additional=()) -> str:
+    additional_names = {name.lower() for name in additional}
+    pairs = []
+    for name, value in headers.items():
+        lower = name.lower()
+        if (
+            lower.startswith("x-oss-")
+            or lower in _DEFAULT_SIGNED_HEADERS
+            or lower in additional_names
+        ):
+            pairs.append((lower, str(value).strip()))
+    pairs.sort(key=lambda pair: pair[0])
+    return "".join(f"{name}:{value}\n" for name, value in pairs)
+
+
+def _authorization(
+    config: OSSConfig,
     method: str,
-    canonical_uri: str,
+    object_key: str | None,
     query: dict[str, str],
-    payload_hash: str,
-    content_type: str | None,
-) -> tuple[str, str, str]:
-    now = datetime.now(timezone.utc)
-    amz_date = now.strftime("%Y%m%dT%H%M%SZ")
-    date_stamp = now.strftime("%Y%m%d")
+    headers: dict[str, str],
+    amz_date: str,
+    additional=(),
+) -> str:
+    region = config.resolved_region
+    if not region:
+        raise ValueError("无法确定 OSS 地域（Region），请在设置中填写")
 
-    headers = {
-        "host": config.endpoint_host,
-        "x-amz-content-sha256": payload_hash,
-        "x-amz-date": amz_date,
-    }
-    if content_type:
-        headers["content-type"] = content_type
-
-    canonical_headers = "".join(
-        f"{name}:{headers[name].strip()}\n" for name in sorted(headers)
-    )
-    signed_headers = ";".join(sorted(headers))
-    canonical_query = _canonical_query(query)
+    date = amz_date[:8]
+    canonical_headers = _canonical_headers(headers, additional)
+    additional_value = ";".join(sorted({name.lower() for name in additional}))
     canonical_request = "\n".join(
         [
             method,
-            canonical_uri,
-            canonical_query,
+            _canonical_uri(config, object_key),
+            _canonical_query(query),
             canonical_headers,
-            signed_headers,
-            payload_hash,
+            additional_value,
+            UNSIGNED_PAYLOAD,
         ]
     )
 
-    credential_scope = f"{date_stamp}/{REGION}/{SERVICE}/aws4_request"
+    scope = f"{date}/{region}/{V4_PRODUCT}/{V4_REQUEST}"
     string_to_sign = "\n".join(
         [
-            ALGORITHM,
+            V4_ALGORITHM,
             amz_date,
-            credential_scope,
+            scope,
             hashlib.sha256(canonical_request.encode("utf-8")).hexdigest(),
         ]
     )
 
-    signing_key = hmac.new(
-        f"AWS4{config.secret_access_key}".encode("utf-8"),
-        date_stamp.encode("utf-8"),
-        hashlib.sha256,
-    ).digest()
-    for part in (REGION, SERVICE, "aws4_request"):
+    signing_key = ("aliyun_v4" + config.access_key_secret).encode("utf-8")
+    for part in (date, region, V4_PRODUCT, V4_REQUEST):
         signing_key = hmac.new(
-            signing_key,
-            part.encode("utf-8"),
-            hashlib.sha256,
+            signing_key, part.encode("utf-8"), hashlib.sha256
         ).digest()
     signature = hmac.new(
-        signing_key,
-        string_to_sign.encode("utf-8"),
-        hashlib.sha256,
+        signing_key, string_to_sign.encode("utf-8"), hashlib.sha256
     ).hexdigest()
 
+    credential = f"{config.access_key_id}/{scope}"
     authorization = (
-        f"{ALGORITHM} Credential={config.access_key_id}/{credential_scope}, "
-        f"SignedHeaders={signed_headers}, Signature={signature}"
+        f"{V4_ALGORITHM} Credential={credential}, Signature={signature}"
     )
-    return amz_date, authorization, canonical_query
+    if additional_value:
+        authorization += f", AdditionalHeaders={additional_value}"
+    return authorization
 
 
 def _extract_error(body: bytes, fallback: str) -> str:
@@ -168,45 +172,46 @@ def _extract_error(body: bytes, fallback: str) -> str:
 
 
 def _request(
-    config: R2Config,
+    config: OSSConfig,
     method: str,
     *,
     object_key: str | None = None,
     query: dict[str, str] | None = None,
     body=None,
-    payload_hash: str | None = None,
     content_type: str | None = None,
     content_length: int | None = None,
 ) -> bytes:
     if not config.is_complete:
-        raise ValueError("R2 配置不完整")
+        raise ValueError("OSS 配置不完整")
 
-    host, canonical_uri = _build_target(config, object_key)
+    host = config.request_host
     query = query or {}
-    if payload_hash is None:
-        payload_hash = EMPTY_SHA256
-
-    amz_date, authorization, canonical_query = _sign(
-        config,
-        method,
-        canonical_uri,
-        query,
-        payload_hash,
-        content_type,
-    )
-
-    path = canonical_uri
+    canonical_query = _canonical_query(query)
+    path = _request_path(object_key)
     if canonical_query:
         path += "?" + canonical_query
 
-    headers = {
-        "Host": host,
-        "x-amz-date": amz_date,
-        "x-amz-content-sha256": payload_hash,
-        "Authorization": authorization,
+    amz_date = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    signed_headers = {
+        "x-oss-content-sha256": UNSIGNED_PAYLOAD,
+        "x-oss-date": amz_date,
     }
     if content_type:
-        headers["Content-Type"] = content_type
+        signed_headers["Content-Type"] = content_type
+    authorization = _authorization(
+        config,
+        method,
+        object_key,
+        query,
+        signed_headers,
+        amz_date,
+    )
+
+    headers = {
+        "Host": host,
+        **signed_headers,
+        "Authorization": authorization,
+    }
     if content_length is not None:
         headers["Content-Length"] = str(content_length)
 
@@ -216,21 +221,20 @@ def _request(
         response = connection.getresponse()
         data = response.read()
         if response.status >= 300:
-            raise R2Error(response.status, _extract_error(data, response.reason))
+            raise OSSError(response.status, _extract_error(data, response.reason))
         return data
-    except R2Error:
+    except OSSError:
         raise
     except (OSError, http.client.HTTPException) as exc:
-        raise R2NetworkError(str(exc) or exc.__class__.__name__) from None
+        raise OSSNetworkError(str(exc) or exc.__class__.__name__) from None
     finally:
         connection.close()
 
 
-def upload(config: R2Config, file_path: str | Path, object_key: str) -> None:
+def upload(config: OSSConfig, file_path: str | Path, object_key: str) -> None:
     path = Path(file_path)
     if not path.is_file():
         raise FileNotFoundError(f"本地文件不存在：{path}")
-    payload_hash = sha256_file(path)
     size = path.stat().st_size
     with path.open("rb") as handle:
         _request(
@@ -238,13 +242,12 @@ def upload(config: R2Config, file_path: str | Path, object_key: str) -> None:
             "PUT",
             object_key=object_key,
             body=handle,
-            payload_hash=payload_hash,
             content_type=content_type_for(path.name),
             content_length=size,
         )
 
 
-def test_connection(config: R2Config) -> None:
+def test_connection(config: OSSConfig) -> None:
     _request(
         config,
         "GET",
@@ -281,7 +284,7 @@ def parse_list_response(data: bytes) -> tuple[list[RemoteObject], str | None]:
     try:
         root = ElementTree.fromstring(data)
     except ElementTree.ParseError as exc:
-        raise R2Error(200, f"无法解析对象列表：{exc}") from None
+        raise OSSError(200, f"无法解析对象列表：{exc}") from None
 
     objects: list[RemoteObject] = []
     truncated = False
@@ -313,12 +316,12 @@ def parse_list_response(data: bytes) -> tuple[list[RemoteObject], str | None]:
 
 
 def list_objects(
-    config: R2Config,
+    config: OSSConfig,
     prefix: str | None = None,
 ) -> list[RemoteObject]:
     """列出前缀下的全部对象（自动翻页）。"""
     if not config.is_complete:
-        raise ValueError("R2 配置不完整")
+        raise ValueError("OSS 配置不完整")
     results: list[RemoteObject] = []
     token: str | None = None
     while True:
@@ -336,24 +339,31 @@ def list_objects(
     return results
 
 
-def download(config: R2Config, object_key: str, dest_path: str | Path) -> None:
+def download(config: OSSConfig, object_key: str, dest_path: str | Path) -> None:
     """把对象下载到本地文件；先写临时文件，成功后再替换。"""
     if not config.is_complete:
-        raise ValueError("R2 配置不完整")
+        raise ValueError("OSS 配置不完整")
     target = Path(dest_path)
     target.parent.mkdir(parents=True, exist_ok=True)
 
-    host, canonical_uri = _build_target(config, object_key)
-    amz_date, authorization, canonical_query = _sign(
-        config, "GET", canonical_uri, {}, EMPTY_SHA256, None
+    host = config.request_host
+    path = _request_path(object_key)
+    amz_date = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    signed_headers = {
+        "x-oss-content-sha256": UNSIGNED_PAYLOAD,
+        "x-oss-date": amz_date,
+    }
+    authorization = _authorization(
+        config,
+        "GET",
+        object_key,
+        {},
+        signed_headers,
+        amz_date,
     )
-    path = canonical_uri
-    if canonical_query:
-        path += "?" + canonical_query
     headers = {
         "Host": host,
-        "x-amz-date": amz_date,
-        "x-amz-content-sha256": EMPTY_SHA256,
+        **signed_headers,
         "Authorization": authorization,
     }
 
@@ -366,7 +376,7 @@ def download(config: R2Config, object_key: str, dest_path: str | Path) -> None:
         response = connection.getresponse()
         if response.status >= 300:
             data = response.read()
-            raise R2Error(
+            raise OSSError(
                 response.status, _extract_error(data, response.reason)
             )
         with os.fdopen(fd, "wb") as handle:
@@ -377,10 +387,10 @@ def download(config: R2Config, object_key: str, dest_path: str | Path) -> None:
                     break
                 handle.write(chunk)
         os.replace(temp_path, target)
-    except R2Error:
+    except OSSError:
         raise
     except (OSError, http.client.HTTPException) as exc:
-        raise R2NetworkError(str(exc) or exc.__class__.__name__) from None
+        raise OSSNetworkError(str(exc) or exc.__class__.__name__) from None
     finally:
         connection.close()
         if fd >= 0:
@@ -394,25 +404,25 @@ def download(config: R2Config, object_key: str, dest_path: str | Path) -> None:
             pass
 
 
-def delete_object(config: R2Config, object_key: str) -> None:
+def delete_object(config: OSSConfig, object_key: str) -> None:
     """删除对象；对象本来就不存在（404）时视为成功。"""
     if not config.is_complete:
-        raise ValueError("R2 配置不完整")
+        raise ValueError("OSS 配置不完整")
     try:
         _request(config, "DELETE", object_key=object_key)
-    except R2Error as exc:
+    except OSSError as exc:
         if exc.code == 404:
             return
         raise
 
 
-def object_exists(config: R2Config, object_key: str) -> bool:
+def object_exists(config: OSSConfig, object_key: str) -> bool:
     """确认对象是否仍存在；404 返回 False。"""
     if not config.is_complete:
-        raise ValueError("R2 配置不完整")
+        raise ValueError("OSS 配置不完整")
     try:
         _request(config, "HEAD", object_key=object_key)
-    except R2Error as exc:
+    except OSSError as exc:
         if exc.code == 404:
             return False
         raise

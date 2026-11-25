@@ -362,7 +362,7 @@ class Player:
                 except Exception:
                     pass
 
-        threading.Thread(target=run, name="r2-playback", daemon=True).start()
+        threading.Thread(target=run, name="oss-playback", daemon=True).start()
 
     def stop(self) -> None:
         with self._lock:

@@ -1,4 +1,4 @@
-"""R2 配置窗口：读写项目文件夹中的 .env。"""
+"""设置窗口：全局快捷键与阿里云 OSS 配置（读写项目文件夹中的 .env）。"""
 
 from __future__ import annotations
 
@@ -6,10 +6,10 @@ import threading
 import tkinter as tk
 from tkinter import messagebox
 
-from .. import r2
+from .. import oss
 from ..config import (
     DEFAULT_PREFIX,
-    R2Config,
+    OSSConfig,
     read_config,
     save_config,
 )
@@ -26,12 +26,13 @@ from ..util import open_path
 from .theme import Theme, UI_FONT
 from .widgets import HotkeyInput, LinkButton, PillButton, ScrollFrame
 
-FIELD_KEYS = ("account", "bucket", "access", "secret", "public", "prefix")
+FIELD_KEYS = ("endpoint", "region", "bucket", "access", "secret", "public", "prefix")
 FIELD_LABELS = {
-    "account": "账户 ID",
-    "bucket": "存储桶名称",
-    "access": "Access Key ID",
-    "secret": "Secret Access Key",
+    "endpoint": "Endpoint",
+    "region": "Region",
+    "bucket": "Bucket 名称",
+    "access": "AccessKey ID",
+    "secret": "AccessKey Secret",
     "public": "公开访问域名",
     "prefix": "对象前缀",
 }
@@ -70,7 +71,7 @@ class SettingsDialog(tk.Toplevel):
         self._load_values()
         self._center(parent)
         self.grab_set()
-        self.after(120, lambda: self.entries["account"].focus_set())
+        self.after(120, lambda: self.entries["endpoint"].focus_set())
 
     # ------------------------------------------------------------------ 界面
     def _build(self) -> None:
@@ -90,7 +91,7 @@ class SettingsDialog(tk.Toplevel):
         ).pack(fill="x")
         tk.Label(
             text_block,
-            text="全局快捷键与 Cloudflare R2 配置",
+            text="全局快捷键与阿里云 OSS 配置",
             font=(UI_FONT, 9),
             fg=theme.on_surface_variant,
             bg=theme.surface,
@@ -128,12 +129,12 @@ class SettingsDialog(tk.Toplevel):
         ).pack(fill="x", pady=(0, 14))
         self._divider(body)
 
-        self._section_title(body, "Cloudflare R2")
+        self._section_title(body, "阿里云 OSS")
         tk.Label(
             body,
             text=(
-                "在 Cloudflare R2 中创建一个 Bucket，并创建一个只允许访问该 Bucket "
-                "的 API Token（建议权限：Object Read & Write）。下面标有 * 的项目为必填。"
+                "在阿里云 OSS 控制台创建一个 Bucket，并准备拥有该 Bucket 读写权限的 "
+                "AccessKey（建议使用只授权该 Bucket 的 RAM 用户）。下面标有 * 的项目为必填。"
             ),
             font=(UI_FONT, 9),
             fg=theme.on_surface_variant,
@@ -143,28 +144,34 @@ class SettingsDialog(tk.Toplevel):
             wraplength=560,
         ).pack(fill="x", pady=(0, 12))
 
-        self.entries["account"] = self._field(
+        self.entries["endpoint"] = self._field(
             body,
-            "account",
-            "账户 ID（Account ID）*",
-            "Cloudflare 控制台 R2 概览页右侧的 Account ID",
+            "endpoint",
+            "Endpoint（地域节点）*",
+            "例如 oss-cn-hangzhou.aliyuncs.com（华东1·杭州）；可在 OSS 控制台 Bucket 概览页查看",
+        )
+        self.entries["region"] = self._field(
+            body,
+            "region",
+            "Region（地域，可留空）",
+            "例如 cn-hangzhou；留空时根据 Endpoint 自动推断，使用全球加速或自定义域名时需手动填写",
         )
         self.entries["bucket"] = self._field(
             body,
             "bucket",
-            "存储桶名称（Bucket）*",
+            "Bucket 名称 *",
             "例如 my-recordings",
         )
         self.entries["access"] = self._field(
             body,
             "access",
-            "Access Key ID *",
-            "R2 API Token 生成的 Access Key ID",
+            "AccessKey ID *",
+            "RAM 用户的 AccessKey ID，建议只授权该 Bucket 的读写权限",
         )
         self.entries["secret"] = self._field(
             body,
             "secret",
-            "Secret Access Key *",
+            "AccessKey Secret *",
             "只保存在本机的 .env 文件中，请勿分享",
             secret=True,
         )
@@ -172,7 +179,7 @@ class SettingsDialog(tk.Toplevel):
             body,
             "public",
             "公开访问域名（可选）",
-            "例如 https://pub-xxxxxxxx.r2.dev，用于列表里的“打开”链接",
+            "例如 https://<Bucket>.<Endpoint> 或自定义域名，用于列表里的“打开”链接",
         )
         self.entries["prefix"] = self._field(
             body,
@@ -186,9 +193,9 @@ class SettingsDialog(tk.Toplevel):
         tk.Label(
             note,
             text=(
-                "安全提示：Access Key 和 Secret 会以明文保存在项目文件夹的 .env 中，"
-                "请勿把 .env 提交到 Git 或发送给别人。建议使用仅限该 Bucket 的"
-                "最小权限 Token；手机或电脑丢失时请及时吊销。"
+                "安全提示：AccessKey ID 和 AccessKey Secret 会以明文保存在项目文件夹的 .env 中，"
+                "请勿把 .env 提交到 Git 或发送给别人。建议使用只授权该 Bucket 的"
+                "最小权限 RAM 用户 AccessKey；泄露时请及时禁用或轮换。"
             ),
             font=(UI_FONT, 8),
             fg=theme.on_secondary_container,
@@ -203,7 +210,7 @@ class SettingsDialog(tk.Toplevel):
         tk.Label(
             body,
             text=(
-                "测试连接会调用 ListObjects，需要 Token 具备读取权限。"
+                "测试连接会调用 ListObjects，需要 AccessKey 具备读取（oss:ListObjects）权限。"
                 "若只给了写入权限，可以跳过测试直接保存。"
             ),
             font=(UI_FONT, 8),
@@ -250,7 +257,7 @@ class SettingsDialog(tk.Toplevel):
 
         self.result_label = tk.Label(
             footer,
-            text="填写完成后可以先测试连接，再保存。",
+            text="填写完成后可以先测试连接，再保存；也可以直接编辑 .env 文件后重启应用。",
             font=(UI_FONT, 8),
             fg=theme.on_surface_variant,
             bg=theme.surface,
@@ -431,10 +438,11 @@ class SettingsDialog(tk.Toplevel):
     # ------------------------------------------------------------------ 数据
     def _load_values(self) -> None:
         config = read_config()
-        self.entries["account"].insert(0, config.account_id)
+        self.entries["endpoint"].insert(0, config.endpoint)
+        self.entries["region"].insert(0, config.region)
         self.entries["bucket"].insert(0, config.bucket)
         self.entries["access"].insert(0, config.access_key_id)
-        self.entries["secret"].insert(0, config.secret_access_key)
+        self.entries["secret"].insert(0, config.access_key_secret)
         self.entries["public"].insert(0, config.public_base_url)
         self.entries["prefix"].insert(0, config.key_prefix or DEFAULT_PREFIX)
 
@@ -464,12 +472,12 @@ class SettingsDialog(tk.Toplevel):
         if current.startswith("请检查") or current.startswith("保存失败"):
             self._set_result("", self._theme.on_surface_variant)
 
-    def _collect(self) -> R2Config | None:
+    def _collect(self) -> OSSConfig | None:
         values = {key: entry.get().strip() for key, entry in self.entries.items()}
         errors: dict[str, str] = {}
 
-        if not values["account"]:
-            errors["account"] = "必填"
+        if not values["endpoint"]:
+            errors["endpoint"] = "必填"
         if not values["bucket"]:
             errors["bucket"] = "必填"
         if not values["access"]:
@@ -481,6 +489,18 @@ class SettingsDialog(tk.Toplevel):
             public.startswith("http://") or public.startswith("https://")
         ):
             errors["public"] = "需要以 http:// 或 https:// 开头"
+
+        config = OSSConfig(
+            endpoint=values["endpoint"],
+            region=values["region"],
+            bucket=values["bucket"],
+            access_key_id=values["access"],
+            access_key_secret=values["secret"],
+            public_base_url=values["public"],
+            key_prefix=values["prefix"] or DEFAULT_PREFIX,
+        )
+        if not errors and not config.resolved_region:
+            errors["region"] = "无法从 Endpoint 推断，请手动填写"
 
         for key, entry in self.entries.items():
             entry.configure(
@@ -499,14 +519,7 @@ class SettingsDialog(tk.Toplevel):
             self.entries[first].focus_set()
             return None
 
-        return R2Config(
-            account_id=values["account"],
-            bucket=values["bucket"],
-            access_key_id=values["access"],
-            secret_access_key=values["secret"],
-            public_base_url=values["public"],
-            key_prefix=values["prefix"] or DEFAULT_PREFIX,
-        )
+        return config
 
     # ------------------------------------------------------------------ 操作
     def _set_result(self, text: str, color: str) -> None:
@@ -529,17 +542,17 @@ class SettingsDialog(tk.Toplevel):
         threading.Thread(
             target=self._test_worker,
             args=(config,),
-            name="r2-test",
+            name="oss-test",
             daemon=True,
         ).start()
 
-    def _test_worker(self, config: R2Config) -> None:
+    def _test_worker(self, config: OSSConfig) -> None:
         try:
-            r2.test_connection(config)
+            oss.test_connection(config)
             result = (True, "连接成功，Bucket 可访问")
-        except r2.R2Error as exc:
+        except oss.OSSError as exc:
             result = (False, f"连接失败：HTTP {exc.code}：{exc.detail}")
-        except r2.R2NetworkError as exc:
+        except oss.OSSNetworkError as exc:
             result = (False, f"连接失败：网络错误：{exc}")
         except Exception as exc:
             result = (False, f"连接失败：{exc}")
@@ -590,9 +603,9 @@ class SettingsDialog(tk.Toplevel):
 
         self._initial_spec = spec
         if config is None:
-            # 快捷键已保存；R2 配置还不完整，保持窗口打开以便继续填写。
+            # 快捷键已保存；OSS 配置还不完整，保持窗口打开以便继续填写。
             self._set_result(
-                "快捷键已保存；R2 配置未填写完整，暂未保存 R2 设置。",
+                "快捷键已保存；阿里云 OSS 配置未填写完整，暂未保存 OSS 设置。",
                 self._theme.on_surface_variant,
             )
             if self._on_saved is not None:

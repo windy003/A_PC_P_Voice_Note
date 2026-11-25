@@ -7,6 +7,7 @@ import subprocess
 import sys
 
 from . import __version__
+from .config import ensure_env_file
 from .paths import APP_DIR, LOG_PATH, ensure_dirs
 from .ui.main_window import MainWindow
 from .ui.theme import LIGHT
@@ -52,7 +53,7 @@ def _set_app_user_model_id() -> None:
         import ctypes
 
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-            "R2Recorder.PC"
+            "OSSRecorder.PC"
         )
     except Exception:
         pass
@@ -73,7 +74,8 @@ def main() -> int:
     _set_app_user_model_id()
     _enable_dpi_awareness()
     _setup_logging()
-    logger.info("启动 R2 录音机 %s", __version__)
+    ensure_env_file()
+    logger.info("启动 OSS 录音机 %s", __version__)
     try:
         window = MainWindow(LIGHT)
         window.mainloop()

@@ -1,4 +1,4 @@
-"""R2 录音机 PC 版启动脚本：python main.py"""
+"""OSS 录音机 PC 版启动脚本：python main.py"""
 
 from r2recorder.__main__ import main
 

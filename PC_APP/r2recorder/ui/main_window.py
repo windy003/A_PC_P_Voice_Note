@@ -89,7 +89,7 @@ class MainWindow(tk.Tk):
         self.show_hotkey: GlobalHotkey | None = None
         self.show_hotkey_spec = self._load_show_hotkey_spec()
 
-        self.title("R2 录音机")
+        self.title("OSS 录音机")
         self.configure(bg=theme.surface)
         self._apply_window_icon()
         self.minsize(600, 640)
@@ -144,12 +144,12 @@ class MainWindow(tk.Tk):
         )
         if tray_started:
             hint = (
-                "R2 录音机已在系统托盘运行 · 按 F9 开始录音，"
+                "OSS 录音机已在系统托盘运行 · 按 F9 开始录音，"
                 "双击托盘图标打开窗口"
             )
             if show_text:
                 hint = (
-                    "R2 录音机已在系统托盘运行 · 按 F9 开始录音，"
+                    "OSS 录音机已在系统托盘运行 · 按 F9 开始录音，"
                     f"按 {show_text} 或双击托盘图标打开窗口"
                 )
         else:
@@ -169,7 +169,7 @@ class MainWindow(tk.Tk):
         titles.pack(side="left", fill="x", expand=True)
         tk.Label(
             titles,
-            text="R2 录音机",
+            text="OSS 录音机",
             font=(UI_FONT, 22, "bold"),
             fg=theme.on_surface,
             bg=theme.surface,
@@ -218,7 +218,7 @@ class MainWindow(tk.Tk):
         banner_text.pack(side="left", fill="x", expand=True)
         tk.Label(
             banner_text,
-            text="尚未配置 R2",
+            text="尚未配置阿里云 OSS",
             font=(UI_FONT, 10, "bold"),
             fg=theme.on_secondary_container,
             bg=theme.secondary_container,
@@ -436,7 +436,7 @@ class MainWindow(tk.Tk):
     def _apply_config_state(self) -> None:
         if read_config().is_complete:
             self.banner.pack_forget()
-            self.subtitle.configure(text="本机录音，自动上传到 Cloudflare R2")
+            self.subtitle.configure(text="本机录音，自动上传到阿里云 OSS")
         else:
             self.banner.pack(
                 fill="x",
@@ -444,14 +444,14 @@ class MainWindow(tk.Tk):
                 pady=(6, 0),
                 before=self.record_card,
             )
-            self.subtitle.configure(text="尚未配置 R2，录音只会保存在本机")
+            self.subtitle.configure(text="尚未配置阿里云 OSS，录音只会保存在本机")
 
     def _require_config(self) -> bool:
         if read_config().is_complete:
             return True
         if messagebox.askyesno(
-            "R2 设置",
-            "请先在 R2 设置中填写配置。现在去设置吗？",
+            "阿里云 OSS 设置",
+            "请先在 OSS 设置中填写配置。现在去设置吗？",
             parent=self,
         ):
             self._open_settings()
@@ -606,7 +606,7 @@ class MainWindow(tk.Tk):
     def _record_hint_text(self) -> str:
         text = (
             f"录音将以 {audio.recording_format_label()} 格式保存在本机，"
-            "配置成功后自动上传到 Cloudflare R2。"
+            "配置成功后自动上传到阿里云 OSS。"
             "全局快捷键：F9 开始 / 停止"
         )
         spec = self.show_hotkey_spec
@@ -714,7 +714,7 @@ class MainWindow(tk.Tk):
         threading.Thread(
             target=self._save_worker,
             args=(data, samplerate, duration_ms, started_at_ms),
-            name="r2-save",
+            name="oss-save",
             daemon=True,
         ).start()
 
@@ -834,7 +834,7 @@ class MainWindow(tk.Tk):
                     and previous_status != UploadStatus.UPLOADED
                 ):
                     self._notify(
-                        "已上传到 R2：" + formats.display_name(recording.created_at)
+                        "已上传到 OSS：" + formats.display_name(recording.created_at)
                     )
                 elif (
                     recording.status == UploadStatus.FAILED
@@ -1021,7 +1021,7 @@ class MainWindow(tk.Tk):
     def _delete(self, recording: Recording) -> None:
         if not messagebox.askyesno(
             "删除录音",
-            "将同时删除本机和 Cloudflare R2 上的文件，其他设备下次同步时也会删除。"
+            "将同时删除本机和阿里云 OSS 上的文件，其他设备下次同步时也会删除。"
             "确定删除吗？",
             parent=self,
         ):
@@ -1122,6 +1122,9 @@ class MainWindow(tk.Tk):
         except tk.TclError:
             pass
         if trigger_sync:
+            # 用户可能刚编辑过 .env，重新读取配置并处理待上传项。
+            self._apply_config_state()
+            self._auto_enqueue()
             # 从系统托盘 / 全局快捷键唤醒也算“打开应用”，做一次云端同步。
             self._request_cloud_sync()
 

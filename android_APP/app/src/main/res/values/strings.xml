@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">R2 录音机</string>
+    <string name="app_name">OSS 录音机</string>
 
     <string name="status_ready">准备录音</string>
     <string name="status_recording">正在录音…</string>
@@ -8,13 +8,13 @@
     <string name="record_start">开始录音</string>
     <string name="record_stop">停止并保存</string>
     <string name="record_starting">正在启动…</string>
-    <string name="record_hint">录音将以 M4A（AAC）格式保存在本机，成功后自动上传到 Cloudflare R2。</string>
+    <string name="record_hint">录音将以 M4A（AAC）格式保存在本机，成功后自动上传到阿里云 OSS。</string>
     <string name="record_permission_denied">需要麦克风权限才能录音</string>
     <string name="record_start_failed">无法开始录音：%1$s</string>
     <string name="record_too_short">录音时间太短，已丢弃</string>
     <string name="record_saved">录音已保存</string>
     <string name="record_saved_uploading">录音已保存，正在上传…</string>
-    <string name="record_saved_local_only">录音已保存 · 未上传（未配置 R2）</string>
+    <string name="record_saved_local_only">录音已保存 · 未上传（未配置阿里云 OSS）</string>
     <string name="upload_result_success">上传成功</string>
     <string name="upload_result_failure">上传失败</string>
     <string name="toast_total">%1$s · 共 %2$d 条</string>
@@ -25,7 +25,7 @@
     <string name="recording_notification_text">点击停止并保存</string>
     <string name="recording_notification_stop">停止</string>
 
-    <string name="config_missing_title">尚未配置 R2</string>
+    <string name="config_missing_title">尚未配置阿里云 OSS</string>
     <string name="config_missing_desc">录音会保存在本机，配置后才能上传。</string>
     <string name="config_action">去配置</string>
     <string name="recordings_title">录音记录</string>
@@ -46,11 +46,11 @@
     <string name="action_retry">重试</string>
     <string name="action_delete">删除</string>
     <string name="action_retry_all">重试全部上传</string>
-    <string name="action_settings">R2 设置</string>
+    <string name="action_settings">OSS 设置</string>
 
     <string name="playback_failed">无法播放这个录音</string>
     <string name="delete_title">删除录音</string>
-    <string name="delete_message">将同时删除手机和 R2 上的文件，其他设备下次同步时也会删除。确定删除吗？</string>
+    <string name="delete_message">将同时删除手机和阿里云 OSS 上的文件，其他设备下次同步时也会删除。确定删除吗？</string>
     <string name="delete_confirm">删除</string>
     <string name="delete_local_only">已删除本地录音（未上传过）</string>
     <string name="delete_cloud_unavailable">已删除本地；无法确定云端对象，未删除云端副本</string>
@@ -59,39 +59,42 @@
     <string name="retry_queued">已加入上传队列</string>
     <string name="retry_all_queued">未上传的录音已加入队列</string>
     <string name="retry_all_empty">没有需要重试的录音</string>
-    <string name="need_config">请先在 R2 设置中填写配置</string>
-    <string name="config_saved">R2 配置已保存</string>
+    <string name="need_config">请先在 OSS 设置中填写配置</string>
+    <string name="config_saved">OSS 配置已保存</string>
 
-    <string name="settings_title">R2 设置</string>
-    <string name="settings_intro">在 Cloudflare R2 中创建一个 Bucket，并创建一个只允许访问该 Bucket 的 API Token（建议权限：Object Read &amp; Write）。</string>
-    <string name="label_account_id">账户 ID（Account ID）</string>
-    <string name="hint_account_id">Cloudflare 控制台 R2 概览页右侧的 Account ID</string>
-    <string name="label_bucket">存储桶名称（Bucket）</string>
+    <string name="settings_title">OSS 设置</string>
+    <string name="settings_intro">在阿里云 OSS 控制台创建 Bucket，并准备拥有该 Bucket 读写权限的 AccessKey（建议使用只授权该 Bucket 的 RAM 用户）。Endpoint、Region、Bucket、AccessKey 与 PC 端 .env 保持一致。</string>
+    <string name="label_endpoint">Endpoint（地域节点）</string>
+    <string name="hint_endpoint">例如 oss-cn-hangzhou.aliyuncs.com</string>
+    <string name="label_region">Region（地域，可留空）</string>
+    <string name="hint_region">例如 cn-hangzhou；留空时根据 Endpoint 自动推断</string>
+    <string name="label_bucket">Bucket 名称</string>
     <string name="hint_bucket">例如 my-recordings</string>
-    <string name="label_access_key">Access Key ID</string>
-    <string name="hint_access_key">R2 API Token 生成的 Access Key ID</string>
-    <string name="label_secret_key">Secret Access Key</string>
-    <string name="hint_secret_key">只保存在本机，使用 Android Keystore 加密</string>
+    <string name="label_access_key">AccessKey ID</string>
+    <string name="hint_access_key">RAM 用户的 AccessKey ID</string>
+    <string name="label_secret_key">AccessKey Secret</string>
+    <string name="hint_secret_key">保存在本机，使用 Android Keystore 加密</string>
     <string name="label_public_url">公开访问域名（可选）</string>
-    <string name="hint_public_url">例如 https://pub-xxxxxxxx.r2.dev，用于“打开”链接</string>
+    <string name="hint_public_url">例如 https://my-bucket.oss-cn-hangzhou.aliyuncs.com，用于“打开”链接</string>
     <string name="label_prefix">对象前缀（可选）</string>
     <string name="hint_prefix">默认 recordings/</string>
-    <string name="settings_security_note">安全提示：Access Key 和 Secret 会加密保存在本机，但应用本身仍能读取。请使用最小权限、仅限该 Bucket 的 Token。手机丢失或应用数据泄露时，请及时吊销 Token。</string>
+    <string name="settings_security_note">安全提示：AccessKey ID 和 AccessKey Secret 会使用 Android Keystore 加密保存在本机，但应用本身仍能读取。请使用最小权限、仅限该 Bucket 的 AccessKey；手机丢失或泄露时请及时禁用或轮换。</string>
     <string name="settings_test">测试连接</string>
     <string name="settings_save">保存</string>
     <string name="settings_testing">正在测试连接…</string>
     <string name="settings_test_ok">连接成功，Bucket 可访问</string>
     <string name="settings_test_failed">连接失败：%1$s</string>
-    <string name="settings_test_note">测试连接会调用 ListObjects，需要 Token 具备读取权限。若只给了写入权限，可以跳过测试直接保存。</string>
+    <string name="settings_test_note">测试连接会调用 ListObjects，需要 AccessKey 具备读取权限。若只给了写入权限，可以跳过测试直接保存。</string>
     <string name="error_required">必填</string>
     <string name="error_url_invalid">需要以 http:// 或 https:// 开头</string>
+    <string name="error_region_required">无法从 Endpoint 推断，请手动填写</string>
     <string name="back">返回</string>
-    <string name="upload_error_no_config">未配置 R2</string>
+    <string name="upload_error_no_config">未配置阿里云 OSS</string>
     <string name="upload_error_file_missing">本地录音文件不存在</string>
     <string name="upload_error_network">网络错误：%1$s</string>
     <string name="upload_error_http">HTTP %1$d：%2$s</string>
     <string name="upload_retry_wait">上传失败，将自动重试</string>
-    <string name="upload_done">已上传到 R2</string>
+    <string name="upload_done">已上传到 OSS</string>
     <string name="upload_failed">上传失败</string>
     <string name="unknown_error">未知错误</string>
     <string name="open_settings">打开设置</string>

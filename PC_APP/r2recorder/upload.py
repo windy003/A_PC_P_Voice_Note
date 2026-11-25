@@ -1,4 +1,4 @@
-"""后台上传队列：把本地录音上传到 R2，并维护状态。"""
+"""后台上传队列：把本地录音上传到阿里云 OSS，并维护状态。"""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ import time
 from dataclasses import replace
 from typing import Callable
 
-from . import r2
-from .config import R2Config
+from . import oss
+from .config import OSSConfig
 from .model import RecordingRepository, UploadStatus
 
 logger = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ class UploadManager:
     def __init__(
         self,
         repository: RecordingRepository,
-        config_provider: Callable[[], R2Config | None],
+        config_provider: Callable[[], OSSConfig | None],
     ):
         self._repository = repository
         self._config_provider = config_provider
@@ -33,7 +33,7 @@ class UploadManager:
         self._closed = False
         self._thread = threading.Thread(
             target=self._worker,
-            name="r2-uploader",
+            name="oss-uploader",
             daemon=True,
         )
         self._thread.start()
@@ -52,15 +52,38 @@ class UploadManager:
         self._queue.put(recording_id)
 
     def enqueue_pending_local(self) -> int:
+        config = self._config_provider()
         count = 0
         for recording in self._repository.snapshot():
+            if not recording.local_path.exists():
+                continue
             if (
-                recording.status == UploadStatus.LOCAL
-                and recording.local_path.exists()
+                recording.status == UploadStatus.UPLOADED
+                and config is not None
+                and self._belongs_to_other_storage(recording, config)
             ):
+                # 云端配置已切换（例如从 R2 迁移到 OSS），把已上传的记录重新上传到新存储。
+                self._repository.update(
+                    recording.id,
+                    lambda item: replace(
+                        item,
+                        status=UploadStatus.LOCAL,
+                        error=None,
+                    ),
+                )
+                recording = self._repository.get(recording.id) or recording
+            if recording.status == UploadStatus.LOCAL:
                 self.enqueue(recording.id)
                 count += 1
         return count
+
+    @staticmethod
+    def _belongs_to_other_storage(recording, config: OSSConfig) -> bool:
+        return (
+            recording.remote_endpoint != config.endpoint_host
+            or recording.remote_bucket != config.bucket
+            or recording.remote_prefix != config.normalized_prefix
+        )
 
     def recover_interrupted(self) -> int:
         """把上次异常退出时残留的 UPLOADING 状态恢复为待上传。"""
@@ -127,7 +150,7 @@ class UploadManager:
 
         config = self._config_provider()
         if config is None:
-            self._fail(recording_id, "未配置 R2")
+            self._fail(recording_id, "未配置阿里云 OSS")
             return
 
         file_path = recording.local_path
@@ -141,9 +164,9 @@ class UploadManager:
         last_error = "上传失败"
         for attempt in range(MAX_ATTEMPTS):
             try:
-                r2.upload(config, file_path, object_key)
-            except (r2.R2Error, r2.R2NetworkError) as exc:
-                if isinstance(exc, r2.R2Error):
+                oss.upload(config, file_path, object_key)
+            except (oss.OSSError, oss.OSSNetworkError) as exc:
+                if isinstance(exc, oss.OSSError):
                     message = f"HTTP {exc.code}：{exc.detail}"
                     retryable = exc.retryable
                 else:
@@ -169,7 +192,7 @@ class UploadManager:
                 if self._repository.get(recording_id) is None:
                     # 上传过程中这条录音被删除了，把刚上传的对象再删掉。
                     try:
-                        r2.delete_object(config, object_key)
+                        oss.delete_object(config, object_key)
                     except Exception:
                         logger.warning(
                             "清理已删除录音的云端对象失败：%s",
@@ -186,6 +209,7 @@ class UploadManager:
                         remote_url=config.public_url_for(object_key),
                         remote_bucket=config.bucket,
                         remote_prefix=config.normalized_prefix,
+                        remote_endpoint=config.endpoint_host,
                         error=None,
                     ),
                 )

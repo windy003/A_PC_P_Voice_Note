@@ -3,12 +3,12 @@ package com.example.r2recorder.sync
 import android.content.Context
 import android.media.MediaMetadataRetriever
 import android.util.Log
-import com.example.r2recorder.data.R2Config
+import com.example.r2recorder.data.OssConfig
 import com.example.r2recorder.data.Recording
 import com.example.r2recorder.data.RecordingRepository
 import com.example.r2recorder.data.SettingsStore
 import com.example.r2recorder.data.UploadStatus
-import com.example.r2recorder.r2.R2Client
+import com.example.r2recorder.oss.OssClient
 import java.io.File
 import java.security.MessageDigest
 import java.text.SimpleDateFormat
@@ -42,7 +42,7 @@ object SyncManager {
         val failedPending = mutableSetOf<String>()
         for (key in PendingDeletes.snapshot(context)) {
             try {
-                R2Client.deleteObject(config, key)
+                OssClient.deleteObject(config, key)
                 PendingDeletes.remove(context, key)
             } catch (e: Exception) {
                 failedPending.add(key)
@@ -62,8 +62,9 @@ object SyncManager {
         }
 
         val objects = try {
-            R2Client.listObjects(config, config.normalizedPrefix)
+            OssClient.listObjects(config, config.normalizedPrefix)
         } catch (e: Exception) {
+            Log.w(TAG, "拉取云端列表失败", e)
             return SyncResult(
                 configured = true,
                 connected = false,
@@ -95,7 +96,8 @@ object SyncManager {
                 repository.update(recording.id) {
                     it.copy(
                         remoteBucket = config.bucket,
-                        remotePrefix = config.normalizedPrefix
+                        remotePrefix = config.normalizedPrefix,
+                        remoteEndpoint = config.endpointHost
                     )
                 }
             }
@@ -119,14 +121,15 @@ object SyncManager {
         val pendingNow = PendingDeletes.snapshot(context)
         for ((key, recording) in localUploaded) {
             if (key in remote || key in pendingNow) continue
-            if (recording.remoteBucket != config.bucket ||
+            if (recording.remoteEndpoint != config.endpointHost ||
+                recording.remoteBucket != config.bucket ||
                 recording.remotePrefix != config.normalizedPrefix
             ) {
-                // 属于另一套 R2 配置，不能因为当前前缀看不到就删本地。
+                // 属于另一套存储配置，不能因为当前前缀看不到就删本地。
                 continue
             }
             val exists = try {
-                R2Client.objectExists(config, key)
+                OssClient.objectExists(config, key)
             } catch (_: Exception) {
                 null
             }
@@ -151,17 +154,17 @@ object SyncManager {
         val config = SettingsStore(context).configOrNull()
         if (config == null) {
             PendingDeletes.add(context, objectKey)
-            return "已删除本地；未配置 R2，云端副本暂未删除" to true
+            return "已删除本地；未配置阿里云 OSS，云端副本暂未删除" to true
         }
         return try {
-            R2Client.deleteObject(config, objectKey)
+            OssClient.deleteObject(config, objectKey)
             PendingDeletes.remove(context, objectKey)
             "已删除本地和云端" to false
         } catch (e: Exception) {
             Log.w(TAG, "立即删除云端对象失败：$objectKey", e)
-            // 对象本来就不存在时 R2 可能返回非 404 的错误；确认一次，避免留下无效待删除记录。
+            // 对象本来就不存在时 OSS 可能返回非 404 的错误；确认一次，避免留下无效待删除记录。
             val stillExists = runCatching {
-                R2Client.objectExists(config, objectKey)
+                OssClient.objectExists(config, objectKey)
             }.getOrNull()
             if (stillExists == false) {
                 PendingDeletes.remove(context, objectKey)
@@ -174,7 +177,7 @@ object SyncManager {
 
     fun formatResult(result: SyncResult): Pair<String, Boolean> {
         if (!result.configured) {
-            return "云端同步未执行：尚未配置 R2" to false
+            return "云端同步未执行：尚未配置阿里云 OSS" to false
         }
         if (!result.connected) {
             return "云端连接失败：${result.error ?: "未知错误"}" to true
@@ -193,13 +196,13 @@ object SyncManager {
 
     private fun downloadOne(
         context: Context,
-        config: R2Config,
-        remoteObject: R2Client.RemoteObject,
+        config: OssConfig,
+        remoteObject: OssClient.RemoteObject,
         repository: RecordingRepository
     ) {
         val desired = safeFileName(remoteObject.key.substringAfterLast('/'))
         val file = uniqueFile(context, repository, desired, remoteObject.key)
-        R2Client.download(config, remoteObject.key, file)
+        OssClient.download(config, remoteObject.key, file)
 
         val record = Recording(
             id = "sync-" + sha256Hex(remoteObject.key).take(16),
@@ -214,7 +217,8 @@ object SyncManager {
             remoteUrl = config.publicUrlFor(remoteObject.key),
             error = null,
             remoteBucket = config.bucket,
-            remotePrefix = config.normalizedPrefix
+            remotePrefix = config.normalizedPrefix,
+            remoteEndpoint = config.endpointHost
         )
         repository.add(record)
     }

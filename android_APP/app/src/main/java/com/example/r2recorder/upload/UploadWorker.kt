@@ -7,7 +7,7 @@ import com.example.r2recorder.R
 import com.example.r2recorder.data.RecordingRepository
 import com.example.r2recorder.data.SettingsStore
 import com.example.r2recorder.data.UploadStatus
-import com.example.r2recorder.r2.R2Client
+import com.example.r2recorder.oss.OssClient
 import com.example.r2recorder.util.Toasts
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -52,10 +52,10 @@ class UploadWorker(
         val objectKey = config.objectKeyFor(recording.fileName)
 
         try {
-            R2Client.upload(config, file, objectKey)
+            OssClient.upload(config, file, objectKey)
             if (repository.get(id) == null) {
                 // 上传过程中这条录音被删除了，把刚上传的对象再删掉。
-                runCatching { R2Client.deleteObject(config, objectKey) }
+                runCatching { OssClient.deleteObject(config, objectKey) }
                 return@withContext Result.success()
             }
             repository.update(id) {
@@ -65,12 +65,13 @@ class UploadWorker(
                     remoteUrl = config.publicUrlFor(objectKey),
                     remoteBucket = config.bucket,
                     remotePrefix = config.normalizedPrefix,
+                    remoteEndpoint = config.endpointHost,
                     error = null
                 )
             }
             notifyResult(success = true)
             Result.success()
-        } catch (e: R2Client.R2Exception) {
+        } catch (e: OssClient.OssException) {
             val message = applicationContext.getString(
                 R.string.upload_error_http,
                 e.code,
