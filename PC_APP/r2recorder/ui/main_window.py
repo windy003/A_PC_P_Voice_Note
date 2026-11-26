@@ -979,6 +979,10 @@ class MainWindow(tk.Tk):
         canvas.bind("<Delete>", self._on_list_delete)
         canvas.bind("<KP_Delete>", self._on_list_delete)
         canvas.bind("<FocusIn>", self._on_list_focus)
+        # 焦点不在列表上（例如停在按钮或窗口本身）时，方向键仍然直接导航列表，
+        # 不必先按 Tab 把焦点移到列表。
+        self.bind("<Up>", self._on_list_up, add="+")
+        self.bind("<Down>", self._on_list_down, add="+")
 
     def _on_list_focus(self, _event=None) -> None:
         if not self._list_cards:
@@ -1671,6 +1675,8 @@ class MainWindow(tk.Tk):
             self.attributes("-topmost", True)
             self.lift()
             self.focus_force()
+            # 唤起后直接把焦点交给录音列表，方向键即可导航，无需先按 Tab。
+            self.after_idle(self._focus_list)
             self.after(300, self._drop_topmost)
         except tk.TclError:
             pass
@@ -1686,6 +1692,14 @@ class MainWindow(tk.Tk):
             self.attributes("-topmost", False)
         except tk.TclError:
             pass
+        # 唤醒初期窗口可能还没真正获得焦点，此时补一次列表聚焦；
+        # 用户已经自己点到其他控件时则不再抢焦点。
+        try:
+            focus = self.focus_get()
+        except (tk.TclError, KeyError):
+            focus = None
+        if focus is None or focus is self:
+            self._focus_list()
 
     def _show_for_dialog(self) -> None:
         if not self._is_visible():
