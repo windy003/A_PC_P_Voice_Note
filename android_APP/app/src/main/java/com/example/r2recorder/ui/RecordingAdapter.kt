@@ -64,7 +64,6 @@ class RecordingAdapter(
                 UploadStatus.LOCAL -> R.string.status_local to R.color.status_local
                 UploadStatus.UPLOADING -> R.string.status_uploading to R.color.status_uploading
                 UploadStatus.UPLOADED -> R.string.status_uploaded to R.color.status_uploaded
-                UploadStatus.FAILED -> R.string.status_failed to R.color.status_failed
             }
             binding.tvStatus.setText(statusText)
             binding.tvStatus.backgroundTintList =
@@ -78,12 +77,8 @@ class RecordingAdapter(
                 if (isPlaying) R.string.action_stop_play else R.string.action_play
             )
             binding.btnOpen.isVisible = !item.remoteUrl.isNullOrBlank()
-            binding.btnRetry.isVisible =
-                item.status == UploadStatus.LOCAL || item.status == UploadStatus.FAILED
-            binding.btnRetry.text = context.getString(
-                if (item.status == UploadStatus.LOCAL) R.string.action_upload
-                else R.string.action_retry
-            )
+            binding.btnRetry.isVisible = item.status == UploadStatus.LOCAL
+            binding.btnRetry.text = context.getString(R.string.action_upload)
 
             binding.btnPlay.setOnClickListener { callbacks.onPlay(item) }
             binding.btnOpen.setOnClickListener { callbacks.onOpen(item) }

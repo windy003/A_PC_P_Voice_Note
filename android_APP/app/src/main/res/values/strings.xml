@@ -38,15 +38,12 @@
     <string name="status_local">待上传</string>
     <string name="status_uploading">上传中</string>
     <string name="status_uploaded">已上传</string>
-    <string name="status_failed">上传失败</string>
 
     <string name="action_play">播放</string>
     <string name="action_stop_play">停止</string>
     <string name="action_open">打开</string>
     <string name="action_upload">上传</string>
-    <string name="action_retry">重试</string>
     <string name="action_delete">删除</string>
-    <string name="action_retry_all">重试全部上传</string>
     <string name="action_settings">OSS 设置</string>
 
     <string name="playback_failed">无法播放这个录音</string>
@@ -58,8 +55,6 @@
     <string name="cancel">取消</string>
     <string name="open_url_failed">没有可打开的应用</string>
     <string name="retry_queued">已加入上传队列</string>
-    <string name="retry_all_queued">未上传的录音已加入队列</string>
-    <string name="retry_all_empty">没有需要重试的录音</string>
     <string name="need_config">请先在 OSS 设置中填写配置</string>
     <string name="config_saved">OSS 配置已保存</string>
 
@@ -94,7 +89,6 @@
     <string name="upload_error_file_missing">本地录音文件不存在</string>
     <string name="upload_error_network">网络错误：%1$s</string>
     <string name="upload_error_http">HTTP %1$d：%2$s</string>
-    <string name="upload_retry_wait">上传失败，将自动重试</string>
     <string name="upload_done">已上传到 OSS</string>
     <string name="upload_failed">上传失败</string>
     <string name="unknown_error">未知错误</string>

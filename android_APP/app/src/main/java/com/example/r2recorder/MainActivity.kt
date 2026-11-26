@@ -94,11 +94,6 @@ class MainActivity : AppCompatActivity(), RecordingAdapter.Callbacks {
                     true
                 }
 
-                R.id.action_retry_all -> {
-                    retryAllUploads()
-                    true
-                }
-
                 else -> false
             }
         }
@@ -357,7 +352,7 @@ class MainActivity : AppCompatActivity(), RecordingAdapter.Callbacks {
             return
         }
         repository.update(recording.id) {
-            it.copy(status = com.example.r2recorder.data.UploadStatus.LOCAL, error = null)
+            it.copy(status = UploadStatus.LOCAL, error = null)
         }
         UploadManager.retry(this, recording.id)
         Toasts.show(this, getString(R.string.retry_queued))
@@ -428,19 +423,6 @@ class MainActivity : AppCompatActivity(), RecordingAdapter.Callbacks {
                 Toasts.withTotalCount(this@MainActivity, text),
                 if (isError) Snackbar.LENGTH_LONG else Snackbar.LENGTH_SHORT
             ).show()
-        }
-    }
-
-    private fun retryAllUploads() {
-        if (settingsStore.configOrNull() == null) {
-            showMessage(R.string.need_config, R.string.open_settings) { openSettings() }
-            return
-        }
-        val count = UploadManager.retryAll(this)
-        if (count == 0) {
-            showMessage(R.string.retry_all_empty)
-        } else {
-            Toasts.show(this, getString(R.string.retry_all_queued))
         }
     }
 

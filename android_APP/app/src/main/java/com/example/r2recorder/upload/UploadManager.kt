@@ -1,16 +1,12 @@
 package com.example.r2recorder.upload
 
 import android.content.Context
-import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
-import com.example.r2recorder.data.RecordingRepository
-import com.example.r2recorder.data.UploadStatus
-import java.util.concurrent.TimeUnit
 
 object UploadManager {
     private const val WORK_NAME_PREFIX = "oss-upload-"
@@ -33,7 +29,6 @@ object UploadManager {
                     .setRequiredNetworkType(NetworkType.CONNECTED)
                     .build()
             )
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
             .addTag("oss-upload")
             .build()
 
@@ -51,23 +46,5 @@ object UploadManager {
     fun cancel(context: Context, recordingId: String) {
         WorkManager.getInstance(context)
             .cancelUniqueWork(WORK_NAME_PREFIX + recordingId)
-    }
-
-    fun retryAll(context: Context): Int {
-        val repository = RecordingRepository.get(context)
-        var count = 0
-        repository.snapshot()
-            .filter {
-                (it.status == UploadStatus.LOCAL || it.status == UploadStatus.FAILED) &&
-                    it.localFile(context).exists()
-            }
-            .forEach {
-                repository.update(it.id) { recording ->
-                    recording.copy(status = UploadStatus.LOCAL, error = null)
-                }
-                enqueue(context, it.id, replace = true)
-                count++
-            }
-        return count
     }
 }

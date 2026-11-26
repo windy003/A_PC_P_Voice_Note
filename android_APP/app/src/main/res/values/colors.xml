@@ -23,7 +23,6 @@
     <color name="status_local">#546E7A</color>
     <color name="status_uploading">#1565C0</color>
     <color name="status_uploaded">#2E7D32</color>
-    <color name="status_failed">#C62828</color>
     <color name="status_bar_color">#006493</color>
     <color name="ic_launcher_background">#006493</color>
 </resources>

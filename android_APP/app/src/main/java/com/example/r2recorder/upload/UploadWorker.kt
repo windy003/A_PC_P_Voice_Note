@@ -26,25 +26,13 @@ class UploadWorker(
 
         val config = SettingsStore(applicationContext).configOrNull()
         if (config == null) {
-            repository.update(id) {
-                it.copy(
-                    status = UploadStatus.FAILED,
-                    error = applicationContext.getString(R.string.upload_error_no_config)
-                )
-            }
-            notifyResult(success = false)
+            fail(repository, id, applicationContext.getString(R.string.upload_error_no_config))
             return@withContext Result.failure()
         }
 
         val file = recording.localFile(applicationContext)
         if (!file.exists()) {
-            repository.update(id) {
-                it.copy(
-                    status = UploadStatus.FAILED,
-                    error = applicationContext.getString(R.string.upload_error_file_missing)
-                )
-            }
-            notifyResult(success = false)
+            fail(repository, id, applicationContext.getString(R.string.upload_error_file_missing))
             return@withContext Result.failure()
         }
 
@@ -72,48 +60,36 @@ class UploadWorker(
             notifyResult(success = true)
             Result.success()
         } catch (e: OssClient.OssException) {
-            val message = applicationContext.getString(
-                R.string.upload_error_http,
-                e.code,
-                e.detail
+            fail(
+                repository,
+                id,
+                applicationContext.getString(R.string.upload_error_http, e.code, e.detail)
             )
-            if (e.retryable && runAttemptCount < 2) {
-                repository.update(id) {
-                    it.copy(
-                        status = UploadStatus.FAILED,
-                        error = message + "；" + applicationContext.getString(R.string.upload_retry_wait)
-                    )
-                }
-                Result.retry()
-            } else {
-                repository.update(id) { it.copy(status = UploadStatus.FAILED, error = message) }
-                notifyResult(success = false)
-                Result.failure()
-            }
+            Result.failure()
         } catch (e: IOException) {
-            val message = applicationContext.getString(
-                R.string.upload_error_network,
+            fail(
+                repository,
+                id,
+                applicationContext.getString(
+                    R.string.upload_error_network,
+                    e.message ?: applicationContext.getString(R.string.unknown_error)
+                )
+            )
+            Result.failure()
+        } catch (e: Exception) {
+            fail(
+                repository,
+                id,
                 e.message ?: applicationContext.getString(R.string.unknown_error)
             )
-            if (runAttemptCount < 2) {
-                repository.update(id) {
-                    it.copy(
-                        status = UploadStatus.FAILED,
-                        error = message + "；" + applicationContext.getString(R.string.upload_retry_wait)
-                    )
-                }
-                Result.retry()
-            } else {
-                repository.update(id) { it.copy(status = UploadStatus.FAILED, error = message) }
-                notifyResult(success = false)
-                Result.failure()
-            }
-        } catch (e: Exception) {
-            val message = e.message ?: applicationContext.getString(R.string.unknown_error)
-            repository.update(id) { it.copy(status = UploadStatus.FAILED, error = message) }
-            notifyResult(success = false)
             Result.failure()
         }
+    }
+
+    // 上传失败只回退为未上传并记录错误，不安排自动重试。
+    private fun fail(repository: RecordingRepository, id: String, message: String) {
+        repository.update(id) { it.copy(status = UploadStatus.LOCAL, error = message) }
+        notifyResult(success = false)
     }
 
     private fun notifyResult(success: Boolean) {

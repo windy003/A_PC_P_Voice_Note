@@ -7,8 +7,7 @@ import java.io.File
 enum class UploadStatus {
     LOCAL,
     UPLOADING,
-    UPLOADED,
-    FAILED
+    UPLOADED
 }
 
 data class Recording(

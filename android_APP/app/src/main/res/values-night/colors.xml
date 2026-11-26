@@ -23,6 +23,5 @@
     <color name="status_local">#37474F</color>
     <color name="status_uploading">#0D47A1</color>
     <color name="status_uploaded">#1B5E20</color>
-    <color name="status_failed">#B71C1C</color>
     <color name="status_bar_color">#002435</color>
 </resources>
