@@ -974,8 +974,8 @@ class MainWindow(tk.Tk):
             pass
         canvas.bind("<Up>", self._on_list_up)
         canvas.bind("<Down>", self._on_list_down)
-        canvas.bind("<space>", self._on_list_recognize)
-        canvas.bind("<Shift-space>", self._on_list_toggle_play)
+        canvas.bind("<space>", self._on_list_toggle_play)
+        canvas.bind("<Shift-space>", self._on_list_recognize)
         canvas.bind("<Delete>", self._on_list_delete)
         canvas.bind("<KP_Delete>", self._on_list_delete)
         canvas.bind("<FocusIn>", self._on_list_focus)
