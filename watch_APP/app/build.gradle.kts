@@ -6,8 +6,8 @@ plugins {
 }
 
 /**
- * 读取 key=value 形式的配置文件（PC_APP/.env 或 watch_APP/oss.properties）。
- * 只做最简单的解析：忽略注释、支持 export 前缀和成对引号。
+ * 读取 watch_APP/.env 中的 key=value 配置。
+ * 忽略注释与空行，支持成对的单/双引号。
  */
 fun readKeyValueFile(file: File): Map<String, String> {
     if (!file.isFile) return emptyMap()
@@ -16,7 +16,6 @@ fun readKeyValueFile(file: File): Map<String, String> {
         var line = if (index == 0) raw.removePrefix("﻿") else raw
         line = line.trim()
         if (line.isEmpty() || line.startsWith("#")) return@forEachIndexed
-        if (line.startsWith("export ")) line = line.substring(7).trim()
         val separator = line.indexOf('=')
         if (separator <= 0) return@forEachIndexed
         val key = line.substring(0, separator).trim()
