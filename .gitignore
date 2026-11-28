@@ -3,4 +3,8 @@ PC_APP/.env
 android_APP/.gradle
 android_APP/.idea
 android_APP/app/build
+watch_APP/.env
 PC_APP/data/
+watch_APP/.gradle
+watch_APP/.idea
+watch_APP/app/build

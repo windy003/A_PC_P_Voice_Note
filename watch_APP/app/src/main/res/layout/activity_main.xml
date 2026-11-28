@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/watch_bg">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:gravity="center_horizontal"
+        android:orientation="vertical"
+        android:paddingStart="20dp"
+        android:paddingEnd="20dp">
+
+        <TextView
+            android:id="@+id/statusText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:maxWidth="150dp"
+            android:maxLines="2"
+            android:text="@string/status_ready"
+            android:textColor="@color/watch_text_secondary"
+            android:textSize="13sp" />
+
+        <ImageButton
+            android:id="@+id/recordButton"
+            android:layout_width="84dp"
+            android:layout_height="84dp"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/bg_record_button"
+            android:contentDescription="@string/action_start"
+            android:padding="22dp"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ic_mic_white" />
+
+        <TextView
+            android:id="@+id/detailText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:gravity="center"
+            android:maxWidth="150dp"
+            android:maxLines="2"
+            android:text="@string/hint_tap_to_start"
+            android:textColor="@color/watch_text_tertiary"
+            android:textSize="12sp" />
+    </LinearLayout>
+</FrameLayout>

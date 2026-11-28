@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="watch_bg">#FF000000</color>
+    <color name="record_red">#FFC62828</color>
+    <color name="record_red_dark">#FF8E0000</color>
+    <color name="watch_text_primary">#FFFFFFFF</color>
+    <color name="watch_text_secondary">#B3FFFFFF</color>
+    <color name="watch_text_tertiary">#80FFFFFF</color>
+    <color name="status_ok">#FF66BB6A</color>
+    <color name="status_error">#FFEF5350</color>
+    <color name="status_pending">#FF64B5F6</color>
+</resources>
